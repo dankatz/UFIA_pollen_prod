@@ -17,7 +17,7 @@ library(ggplot2)
 library(dplyr)
 library(sf)
 library(units)
-library(plyr)
+#library(plyr)
 library(stringr)
 library(scales)
 library(here)
@@ -301,9 +301,122 @@ csv_out_path <- file.path(here::here(),"out")
 #pcv_out <- read_csv("C:/Users/dsk273/Documents/tree_census/data_to_analyze/plot_data_to_visualize.csv")
 
 
-### calculate pollen production for each individual tree #######################
+
+
+
+### calculate pollen production for each individual adult tree #######################
+
+ref_species_join <- ref_species %>% select(SPCD, GENUS, SPECIES, COMMON_NAME)
+
+all_trees_for_pollen_prod <- left_join(mtre, ref_species_join) %>% 
+  select(PLT_CN, SPCD, SUBP, STATUSCD, IS_PLANTED, BASAL_AREA, DIA, IS_STREET_TREE,
+         GENUS, SPECIES, COMMON_NAME) %>% 
+  dplyr::mutate(Genus = GENUS,
+         Species = gsub("^\\S+ ", "", SPECIES),
+         dbh_cm = DIA *2.54,
+         tree_BA = 0.00007854 * dbh_cm^2,
+         id = row_number())
+
+#calculate pollen production for each individual tree, now including SDs
+for(i in 1:100){
+  Acne_param_a <- rnorm(n = 1, mean = 253.71, sd = 47.75)
+  Acne_param_b <- rnorm(n = 1, mean = 0.38, sd = 3.26)
+  Acpl_param_a <- rnorm(n = 1, mean = 25.59, sd = 7.00)
+  Acpl_param_b <- rnorm(n = 1, mean = 1.22, sd = 0.46)
+  Acru_param_a <- rnorm(n = 1, mean = 62.32, sd = 13.50)
+  Acru_param_b <- rnorm(n = 1, mean = 1.27, sd = 0.44)
+  Acsa_param_a <- rnorm(n = 1, mean = 2.28, sd =0.49)
+  Acsa_param_b <- rnorm(n = 1, mean = 21.98, sd =0.28)
+  Bepa_param_a <- rnorm(n = 1, mean = 561.16, sd = 228.86)
+  Bepa_param_b <- rnorm(n = 1, mean = 5.03, sd =4.42)
+  Gltr_param_a <- rnorm(n = 1, mean = 659.91, sd =103.36)
+  Gltr_param_b <- rnorm(n = 1, mean = -3.25, sd = 1.97)
+  Juni_param_a <- rnorm(n = 1, mean = 239.08, sd = 64.85)
+  Juni_param_b <- rnorm(n = 1, mean = 11.47, sd = 8.22)
+  Mosp_param_a <- rnorm(n = 1, mean = -67.95, sd = 1366.09)
+  Mosp_param_b <- rnorm(n = 1, mean = 254.06, sd = 93.26)*0.578
+  Mosp_param_c <- rnorm(n = 1, mean = 6021.57, sd =2011.79)
+  Plac_param_a <- rnorm(n = 1, mean = 1066.75, sd = 251.73)
+  Plac_param_b <- rnorm(n = 1, mean = 1.26, sd = 8.15)
+  Posp_param_a <- rnorm(n = 1, mean = 2.01, sd = 0.24)
+  Posp_param_b <- rnorm(n = 1, mean = 24.17, sd = 0.19)
+  Qusp_param_a <- rnorm(n = 1, mean = 423.56, sd = 85.45)
+  Qusp_param_b <- rnorm(n = 1, mean = 36.20, sd = 11.42)
+  Qupa_param_a <- rnorm(n = 1, mean = 327.2, sd =100.94)
+  Qupa_param_b <- rnorm(n = 1, mean = 14.9, sd = 7.41)
+  Ulsp_param_a <- rnorm(n = 1, mean = 546.56, sd = 89.86) #rnorm(n = 1, mean = 5.86, sd = 0.35)
+  Ulsp_param_b <- rnorm(n = 1, mean = 23.76, sd = 17.06) #rnorm(n = 1, mean = 23.11, sd = 0.15)
+  
+  it_dbh_genus_np_i <-  #
+    all_trees_for_pollen_prod %>%  
+    mutate(per_tree_pollen_prod = case_when(
+      Genus == "Acer" & Species == "negundo"  ~ ( Acne_param_a * tree_BA + Acne_param_b) *0.558, #.558 is the sex ratio,
+      Genus == "Acer" & Species == "platanoides"  ~ Acpl_param_a * tree_BA + Acpl_param_b,
+      Genus == "Acer" & Species == "rubrum"  ~ ( Acru_param_a * tree_BA + Acru_param_b) * 0.106, #.106 is the sex ratio
+      Genus == "Acer" & Species == "saccharinum"~ (exp( Acsa_param_a * tree_BA + Acsa_param_b))/1000000000, #convert to billions
+      Genus == "Betula"  ~ Bepa_param_a* tree_BA + Bepa_param_b,
+      Genus == "Gleditsia"  ~ Gltr_param_a * tree_BA + Gltr_param_b,
+      Genus == "Juglans"  ~ Juni_param_a * tree_BA + Juni_param_b,
+      Genus == "Morus"  ~ (Mosp_param_c * tree_BA^2 + Mosp_param_a * tree_BA + Mosp_param_b) *0.578, #.58 adjusts for sex ratio
+      Genus == "Platanus"  ~ Plac_param_a * tree_BA + Plac_param_b,
+      Genus == "Populus"  ~ (exp( Posp_param_a * tree_BA + Posp_param_b) * 0.482)/1000000000, #convert to billions
+      Genus == "Quercus"  ~ Qusp_param_a * tree_BA + Qusp_param_b, #red oaks and unknown oaks
+      Genus == "Quercus" & Species == "palustris"  ~ Qupa_param_a * tree_BA + Qupa_param_b, #pin oaks
+      Genus == "Ulmus"  ~ ( Ulsp_param_a * tree_BA + Ulsp_param_b) 
+    ),
+    iter = i ) #did a gut check against fig 3 in Katz et al. 2020; all of these currently line up
+  
+  
+  ifelse(i == 1,
+         it_dbh_genus_np_all <- it_dbh_genus_np_i,
+         it_dbh_genus_np_all <- bind_rows(it_dbh_genus_np_all, it_dbh_genus_np_i))
+  print(i)
+}
+
+indiv_tree_pol_pred <- it_dbh_genus_np_all %>% 
+  group_by(id) %>% 
+  dplyr::summarize(pol_mean = mean(per_tree_pollen_prod), 
+            pol_sd = sd(per_tree_pollen_prod))
+
+all_trees_pollen_prod <- left_join(all_trees_for_pollen_prod, indiv_tree_pol_pred)
+  
+
+
 
 ### combining the plot and census data with the individual tree data ###########
+
+all_trees2 <- left_join( all_trees_pollen_prod, pcv_out)
+
+#stopping here for the moment, need to do some QA/QC on why so many of the rows are missing info from pcv_out
+
+
+
+
+    mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
+                                 STATUSCD == 1 ~ 1),
+         trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
+                                   IS_PLANTED == 2 ~ 0, #2 == natural origin
+                                   IS_PLANTED == 3 ~ 0),
+         stree_tree = IS_STREET_TREE) 
+
+
+
+  mutate(estimate_c_building_age = case_when(estimate_c_building_age == 0 ~ NA, #removing odd values
+                                             estimate_c_building_age > 100 ~ estimate_c_building_age)) %>%  
+  mutate(estimate_c_perc_poverty = 100 * estimate_c_poverty,
+         estimate_c_perc_white = 100 * estimate_p_c_white,
+         plot_perc_planted = 100 * trees_planted,
+         plot_perc_street_tree = 100 * stree_tree) 
+
+  filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
+  filter(STATUSCD == 1 | STATUSCD == 2) %>% #removing trees that weren't measured due to no longer being in the sample
+  #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
+
+
+
+ # filter(city %in% NE_cities_not_eval)
+
+
 
 ### Fig 1: pollen production by city and genus #################################
 
