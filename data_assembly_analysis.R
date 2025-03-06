@@ -82,12 +82,13 @@ plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plo
 
 ######   Now get census tract data for each city ############################### 
 #including additional cities that were available on 11/23/2024
-evals <- c("AustinTX2022Curr", "BaltimoreMD2022Curr", "BurlingtonVT2022Curr",  "ChicagoIL2022Curr",
-           "ClevelandOH2022Curr",  "DesMoinesIA2022Curr", "HoustonTX2022Curr", "KansasCityMO2022Curr",
-           "MadisonWI2022Curr",  "MilwaukeeWI2022Curr",  "MinneapolMN2022Curr",  "PittsburghPA2022Curr",
-           "PortlandME2022Curr", "PortlandOR2022Curr", "ProvidenceRI2022Curr", "RochesterNY2022Curr", 
-           "SanAntonioTX2022Curr", "SanDiegoCA2022Curr", "SpringfielMO2020Curr", "StLouisMO2022Curr",    
-           "TrentonNJ2022Curr", "WashingtonDC2022Curr" )
+evals <- NE_cities
+# evals <- c("AustinTX2022Curr", "BaltimoreMD2022Curr", "BurlingtonVT2022Curr",  "ChicagoIL2022Curr",
+#            "ClevelandOH2022Curr",  "DesMoinesIA2022Curr", "HoustonTX2022Curr", "KansasCityMO2022Curr",
+#            "MadisonWI2022Curr",  "MilwaukeeWI2022Curr",  "MinneapolMN2022Curr",  "PittsburghPA2022Curr",
+#            "PortlandME2022Curr", "PortlandOR2022Curr", "ProvidenceRI2022Curr", "RochesterNY2022Curr", 
+#            "SanAntonioTX2022Curr", "SanDiegoCA2022Curr", "SpringfielMO2020Curr", "StLouisMO2022Curr",    
+#            "TrentonNJ2022Curr", "WashingtonDC2022Curr" )
 
 pcv_out <- list() 
 
@@ -385,43 +386,100 @@ all_trees_pollen_prod <- left_join(all_trees_for_pollen_prod, indiv_tree_pol_pre
 
 ### combining the plot and census data with the individual tree data ###########
 
-all_trees2 <- left_join( all_trees_pollen_prod, pcv_out)
-
-#stopping here for the moment, need to do some QA/QC on why so many of the rows are missing info from pcv_out
-
-
-
-
-    mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
+pc <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on why so many of the rows are missing info from pcv_out
+  
+  mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
                                  STATUSCD == 1 ~ 1),
          trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
                                    IS_PLANTED == 2 ~ 0, #2 == natural origin
                                    IS_PLANTED == 3 ~ 0),
-         stree_tree = IS_STREET_TREE) 
-
-
-
+         stree_tree = IS_STREET_TREE) %>% 
   mutate(estimate_c_building_age = case_when(estimate_c_building_age == 0 ~ NA, #removing odd values
                                              estimate_c_building_age > 100 ~ estimate_c_building_age)) %>%  
   mutate(estimate_c_perc_poverty = 100 * estimate_c_poverty,
          estimate_c_perc_white = 100 * estimate_p_c_white,
          plot_perc_planted = 100 * trees_planted,
-         plot_perc_street_tree = 100 * stree_tree) 
+         plot_perc_street_tree = 100 * stree_tree) %>% 
 
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
-  filter(STATUSCD == 1 | STATUSCD == 2) %>% #removing trees that weren't measured due to no longer being in the sample
+  filter(STATUSCD == 1 | STATUSCD == 2) %>%  #removing trees that weren't measured due to no longer being in the sample
   #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
+  filter(city %in% NE_cities_not_eval) %>% 
+  filter(!is.na(pol_mean))
 
+plots_per_city <- left_join( all_trees_pollen_prod, pcv_out) %>%  
+  dplyr::group_by(city) %>% 
+  dplyr::select(PLT_CN) %>% 
+  dplyr::distinct() %>% 
+  dplyr::count(city) %>% 
+  dplyr::rename(n_plots = n)
 
-
- # filter(city %in% NE_cities_not_eval)
-
-
+pc <- left_join(pc, plots_per_city)
 
 ### Fig 1: pollen production by city and genus #################################
+pc %>% 
+  dplyr::group_by(city, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean),
+            pol_sum_city = pol_sum/n_plots) %>% 
+  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
+  ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
+  ylab("average pollen production per plot (millions of grains)") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy")
 
 ### Fig 2: plot level pollen production as a function of poverty ###############
 
+plot_summary <- pc %>% 
+  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white) %>% 
+  dplyr::summarize(pol_sum_plot = sum(pol_mean))
+
+  
+#do some stats
+m1 <- lmer(pol_sum_plot ~ (1|city) + estimate_c_perc_poverty, data = plot_summary)
+m1_summary <- summary(m1) #plot(m1)
+m1_slope <- round(m1_summary$coefficients[2,1], 2)
+m1_intercept <- round(m1_summary$coefficients[1,1], 2)
+m1_slope_p <- round(m1_summary$coefficients[2,5], 2)
+
+#create plot
+sjPlot::plot_model(m1, type = "pred") +   
+  geom_point(aes(x = estimate_c_perc_poverty, y = pol_sum_plot, color = as.factor(city)),  data = plot_summary) +  
+  xlab("households in poverty (%)") + ylab("total pollen production per plot (millions of grains)") +
+  ggthemes::theme_few() + scale_color_discrete()+
+  ggtitle("association between poverty and pollen production")+
+  annotate("text", x = 50, y = 3000, label = paste0("y = ", m1_slope, " * x + ", m1_intercept, ", p = ", m1_slope_p)) 
+
+
+
 ### Fig 3: plot level pollen production as a function of race/ethnicity ########
+plot_summary <- pc %>% 
+  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white) %>% 
+  dplyr::summarize(pol_sum_plot = sum(pol_mean))
+
+#do some stats
+m2 <- lmer(pol_sum_plot ~ (1|city) + estimate_c_perc_white, data = plot_summary)
+m2_summary <- summary(m2) #plot(m2)
+m2_slope <- round(m2_summary$coefficients[2,1], 2)
+m2_intercept <- round(m2_summary$coefficients[1,1], 2)
+m2_slope_p <- round(m2_summary$coefficients[2,5], 2)
+
+#create plot
+sjPlot::plot_model(m2, type = "pred") +   
+  geom_point(aes(x = estimate_c_perc_white, y = pol_sum_plot, color = as.factor(city)),  data = plot_summary) +  
+  xlab("white (%)") + ylab("total pollen production per plot (millions of grains)") +
+  ggthemes::theme_few() + scale_color_discrete()+
+  ggtitle("association between race and pollen production")+
+  annotate("text", x = 50, y = 3000, label = paste0("y = ", m2_slope, " * x + ", m2_intercept, ", p = ", m2_slope_p)) 
 
 
+
+### Fig 4: differences in pollen production between planted and unplanted trees
+# pc %>% 
+#   dplyr::group_by(city, trees_planted, Genus) %>% 
+#   dplyr::summarize(pol_sum = sum(pol_mean),
+#                    pol_sum_city = pol_sum/n_plots) %>% 
+#   distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
+#   ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
+#   ylab("average pollen production per plot (millions of grains)") + 
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+#   grafify::scale_fill_grafify(palette = "fishy")
