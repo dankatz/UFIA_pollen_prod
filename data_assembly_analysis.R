@@ -393,13 +393,13 @@ pc <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on 
          trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
                                    IS_PLANTED == 2 ~ 0, #2 == natural origin
                                    IS_PLANTED == 3 ~ 0),
-         stree_tree = IS_STREET_TREE) %>% 
+         street_tree = IS_STREET_TREE) %>% 
   mutate(estimate_c_building_age = case_when(estimate_c_building_age == 0 ~ NA, #removing odd values
                                              estimate_c_building_age > 100 ~ estimate_c_building_age)) %>%  
   mutate(estimate_c_perc_poverty = 100 * estimate_c_poverty,
          estimate_c_perc_white = 100 * estimate_p_c_white,
          plot_perc_planted = 100 * trees_planted,
-         plot_perc_street_tree = 100 * stree_tree) %>% 
+         plot_perc_street_tree = 100 * street_tree) %>% 
 
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
   filter(STATUSCD == 1 | STATUSCD == 2) %>%  #removing trees that weren't measured due to no longer being in the sample
@@ -473,13 +473,29 @@ sjPlot::plot_model(m2, type = "pred") +
 
 
 
-### Fig 4: differences in pollen production between planted and unplanted trees
-# pc %>% 
-#   dplyr::group_by(city, trees_planted, Genus) %>% 
-#   dplyr::summarize(pol_sum = sum(pol_mean),
-#                    pol_sum_city = pol_sum/n_plots) %>% 
-#   distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
-#   ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
-#   ylab("average pollen production per plot (millions of grains)") + 
-#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
-#   grafify::scale_fill_grafify(palette = "fishy")
+### Fig 4: differences in pollen production between planted and natural trees ################
+pc %>%
+  mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
+                                         trees_planted == 1 ~ "planted")) %>% 
+  dplyr::group_by(city, trees_planted_label, Genus) %>%
+  dplyr::summarize(pol_sum = sum(pol_mean),
+                   pol_sum_city = pol_sum/n_plots) %>%
+  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
+  ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
+  ylab("average pollen production per plot (millions of grains)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~trees_planted_label, ncol = 1)
+
+
+### Fig 5: differences between street trees and non-street trees #################
+pc %>%
+  mutate(street_tree_label = case_when(street_tree == 0 ~ "not a street tree",
+                                       street_tree == 1 ~ "street tree")) %>% 
+  dplyr::group_by(city, street_tree_label, Genus) %>%
+  dplyr::summarize(pol_sum = sum(pol_mean),
+                   pol_sum_city = pol_sum/n_plots) %>%
+  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
+  ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
+  ylab("average pollen production per plot (millions of grains)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~street_tree_label, ncol = 1)
