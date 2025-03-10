@@ -91,11 +91,10 @@ evals <- NE_cities
 #            "TrentonNJ2022Curr", "WashingtonDC2022Curr" )
 
 pcv_out <- list() 
-
 for(i in c(1:length(evals))){   # to run all cities. 
   
   # Specify the EVALID (evaluation ID)
-  city_choose <- evals[i]  #city_choose <- evals[1]
+  city_choose <- evals[i]  #city_choose <- evals[11]
   
   # subset the Pop stratum Calc (psc) table for a single evaluation
   ## The rows provide the NLCD-based area expansion factors, each plot is assigned to one.
@@ -121,7 +120,7 @@ for(i in c(1:length(evals))){   # to run all cities.
   Plot$EVALID <- city_choose
   
   # Set CRS of Plot df to nad 83
-  sf_plots <-  st_as_sf(Plot, coords = c("LON", "LAT"),crs = 4269) 
+  sf_plots <-  st_as_sf(Plot, coords = c("LON", "LAT"),crs = 4269) #filter(sf_plots, PLT_CN == "354918270489998")
   
   # bring in state code for census API
   sf_plots$state <- plt$STATECD[match(sf_plots$PLT_CN, plt$CN)]
@@ -154,11 +153,7 @@ for(i in c(1:length(evals))){   # to run all cities.
                     state = unique(sf_plots$state), 
                     year = 2020,
                     geometry = TRUE) 
-  
-  # find the city in the place file. Troubleshooting
-  #as.data.frame(places[1400:1500,])
-  # places[1474,]
-  
+     
   # Find the index of the best match
   best_match_index <- stringdist::amatch(parsed_city_name, places$NAME , maxDist = Inf)
   
@@ -168,17 +163,24 @@ for(i in c(1:length(evals))){   # to run all cities.
   # spatial subset of the state block groups by the city place boundary
   city_block_groups <- bg[just_the_place, ]
   
-  
+  #it looks like "Trenton, NJ" actually includes Princeton and some areas outside the city too
+  if(parsed_city_name == "Trenton, NJ"){ 
+    city_block_groups <-  st_crop(bg, xmin = -75, ymin = 40, xmax = -74, ymax = 40.5) #plot(bg_test["estimate_c_white"])
+  }
+     
+
   ### using a buffered extraction
   sf_plots_buffer <- st_buffer(sf_plots, dist = 1000)
-  
+
   # it would be better to use st_intersection to create a weighted mean, but that was prohibitively slow and
   # given that there are a very large number of block groups within each 3km2 circle, this should have a minor effect
   city_block_groups_mean_pov <- dplyr::select(city_block_groups, estimate_c_perc_poverty)
-  buffered_plot_mean_pov <- aggregate(city_block_groups_mean_pov, sf_plots_buffer, mean, na.rm = TRUE)
+  buffered_plot_mean_pov <- aggregate(city_block_groups_mean_pov, sf_plots_buffer, mean, na.rm = TRUE) %>% 
+    st_centroid() %>% st_buffer(1) #adding this in to remove rounding errors from points when trying to join later
   
   city_block_groups_mean_white <- dplyr::select(city_block_groups, estimate_c_perc_white)
-  buffered_plot_mean_white <- aggregate(city_block_groups_mean_white, sf_plots_buffer, mean, na.rm = TRUE)
+  buffered_plot_mean_white <- aggregate(city_block_groups_mean_white, sf_plots_buffer, mean, na.rm = TRUE)%>% 
+    st_centroid() %>% st_buffer(1) #adding this in to remove rounding errors from points when trying to join later
   
   pcv <- st_join(sf_plots, buffered_plot_mean_pov) 
   pcv <- st_join(pcv, buffered_plot_mean_white)
@@ -190,11 +192,12 @@ for(i in c(1:length(evals))){   # to run all cities.
   #dplyr::select(sf_plots_buffer, "PLT_CN", "income_full.estimate", "PLOT_STATUS_CD_LAB")
   
   # some visual tests
-  # plot(test["estimate_c_perc_poverty"])
+  # plot(just_the_place["estimate"])
+  # plot(buffered_plot_mean_pov)
   # plot(bg["estimate_c_poverty"])
   # plot(city_block_groups["estimate_c_poverty"])
   # plot(city_block_groups_mean_pov)
-  # plot(buffered_plot_mean_pov)
+  # plot(buffered_plot_mean_pov %>% st_buffer(500))
   # plot(pcv["estimate_c_perc_poverty"])
   # plot(pcv["estimate_c_perc_white"])
   
@@ -204,13 +207,26 @@ for(i in c(1:length(evals))){   # to run all cities.
 } #end UFIA data extraction loop
 
 
+
+
 ### save the file used in the analysis 
 csv_out_path <- file.path(here::here())
 #write_csv(pcv_out, file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
 #pcv_out <- read_csv(file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
 
+
 #some QAQC on missing rows
 pcv$PLT_CN
+names(pcv_out)
+pcv_out %>% 
+  group_by(city) %>% 
+  summarise(sum_na = sum(is.na(estimate_c_perc_poverty)))
+    
+pcv_out %>% 
+  filter(city == "MadisonWI") %>% 
+ggplot(aes(x = lon, y = lat, col = estimate_c_perc_poverty)) + geom_point()   
+
+
 
 
 ### calculate pollen production for each individual adult tree #######################
@@ -227,7 +243,7 @@ all_trees_for_pollen_prod <- left_join(mtre, ref_species_join) %>%
          id = row_number())
 
 #calculate pollen production for each individual tree, now including SDs
-for(i in 1:100){
+for(i in 1:10){
   Acne_param_a <- rnorm(n = 1, mean = 253.71, sd = 47.75)
   Acne_param_b <- rnorm(n = 1, mean = 0.38, sd = 3.26)
   Acpl_param_a <- rnorm(n = 1, mean = 25.59, sd = 7.00)
@@ -295,7 +311,6 @@ all_trees_pollen_prod <- left_join(all_trees_for_pollen_prod, indiv_tree_pol_pre
 ### combining the plot and census data with the individual tree data ###########
 
 pc <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on why so many of the rows are missing info from pcv_out
-  
   mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
                                  STATUSCD == 1 ~ 1),
          trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
@@ -303,8 +318,8 @@ pc <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on 
                                    IS_PLANTED == 3 ~ 0),
          street_tree = IS_STREET_TREE) %>% 
   
-mutate(plot_perc_planted = 100 * trees_planted,
-plot_perc_street_tree = 100 * street_tree) %>% 
+  mutate(plot_perc_planted = 100 * trees_planted,
+         plot_perc_street_tree = 100 * street_tree) %>% 
   
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
   filter(STATUSCD == 1 | STATUSCD == 2) %>%  #removing trees that weren't measured due to no longer being in the sample
@@ -320,6 +335,9 @@ plots_per_city <- left_join( all_trees_pollen_prod, pcv_out) %>%
   dplyr::rename(n_plots = n)
 
 pc <- left_join(pc, plots_per_city)
+
+#check on any values where the census info didn't get through
+#test <- pc %>% filter(is.na(estimate_c_perc_poverty))
 
 ### Fig 1: pollen production by city and genus #################################
 pc %>% 
@@ -404,3 +422,19 @@ pc %>%
   ylab("average pollen production per plot (millions of grains)") +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
   grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~street_tree_label, ncol = 1)
+
+
+### SI: are there associations between poverty and pollen production for any tree genera ##########
+pc %>% 
+  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white, Genus) %>% 
+  dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
+  ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot, color = city)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
+
+### SI: misc sub-analyses ####################
+pc %>% 
+  filter(street_tree == 1) %>% 
+  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white, Genus) %>% 
+  dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
+  ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
+
+
