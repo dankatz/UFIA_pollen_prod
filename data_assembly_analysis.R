@@ -1,7 +1,7 @@
 #This script is for quantifying pollen production in US cities included in the UFIA 
-#It uses buffered plot locations instead of using actual plot locations
-#The authors are Keily Peralta, and Daniel Katz (dankatz@cornell.edu)
-
+#It uses jittered plot locations instead of using actual plot locations when comparing to US Census data
+#Author: Daniel Katz (dankatz@cornell.edu), to be used for Keily Peralta's senior thesis
+# Pieces of the script are borrowed from Alex Young's work on the 'Poor Trees' project
 
 ### prepare work environment ###################################################
 #install all required packages
@@ -17,7 +17,7 @@ library(ggplot2)
 library(dplyr)
 library(sf)
 library(units)
-#library(plyr)
+#library(plyr) #from Alex's script, should see if I can remove it to prevent namespace conflicts
 library(stringr)
 library(scales)
 library(here)
@@ -102,15 +102,6 @@ for(i in c(1:length(evals))){   # to run all cities.
   Stratum <- psc[psc$EVALID == city_choose ,]
   Stratum$STRATUM_CN <- as.factor(Stratum$CN)
   
-  ##  Select only the city estimation unit for 3 cities that have multiple estimation units
-  if(city_choose == "StLouis2021Curr"){
-    Stratum <- Stratum[Stratum$ESTN_UNIT_NAME=="City of St. Louis, MO",] }
-  
-  if(city_choose == "KansasCity2021Curr"){
-    Stratum <- Stratum[Stratum$ESTN_UNIT_NAME=="City of Kansas City, MO",] }
-  
-  if(city_choose == "SanAntonio2021Curr"){
-    Stratum <- Stratum[Stratum$ESTN_UNIT_NAME=="City of San Antonio, TX",] }
   
   # parse Stratum dataframe to identify the city
   parsed_city_name <- sub(" [0-9]{4}.*", "", unique(Stratum$EVAL_NAME))
@@ -135,22 +126,28 @@ for(i in c(1:length(evals))){   # to run all cities.
   # bring in state code for census API
   sf_plots$state <- plt$STATECD[match(sf_plots$PLT_CN, plt$CN)]
   
-  # Make up a random plot number to obfuscate plot_CN 
-  #DK: Note: this is no longer needed but maybe not worth removing
-  random_numbers <- sample(100000:999999,  dim(sf_plots)[1] , replace = TRUE)
-  sf_plots$plot_number <- paste( random_numbers ,sf_plots$EVALID, sep="-")
-  
-  
-  
-  ###################################################
-  ###################################################
-  ## Retrieve the block group values for the state.
-  ######   Now get the block group income
+  ### Retrieve the block group income values for the state.
   bg <- get_acs(geography = "block group", 
-                variables = c(medincome = "B19013_001"), 
+                variables = c(medincome = "B19013_001", 
+                              c_white = "B03002_003", c_black = "B03002_004", c_latinx = "B03002_012", 
+                              c_all_races_ethnicities = "B03002_001",
+                              #see description of race/ethnicity here: https://censusreporter.org/topics/race-hispanic/
+                              c_building_age = "B25035_001",
+                              c_pop = "B01003_001",
+                              c_poverty_tot = "B17010_001",
+                              c_poverty_below = "B17010_002"),
+                #summary_var = ,        
                 state = unique(sf_plots$state), 
                 year = 2020,
-                geometry = TRUE) 
+                geometry = TRUE) %>% 
+     tidyr::pivot_wider(names_from = variable, values_from = c(estimate, moe)) %>% 
+     mutate(area = st_area(.)) %>% 
+     mutate(people_km2 = estimate_c_pop / (as.numeric(area)/1000000),
+           estimate_c_poverty = estimate_c_poverty_below/estimate_c_poverty_tot,
+           estimate_c_perc_poverty = 100 * estimate_c_poverty,
+           estimate_c_perc_white = 100 * (estimate_c_white/estimate_c_all_races_ethnicities),
+           estimate_c_building_age = case_when(estimate_c_building_age < 100 ~ NA,  #removing odd values
+                                               .default = estimate_c_building_age))
   
   places <- get_acs(geography = "place", 
                     variables = c(medincome = "B19013_001"), 
@@ -172,137 +169,48 @@ for(i in c(1:length(evals))){   # to run all cities.
   city_block_groups <- bg[just_the_place, ]
   
   
-  # this catches an error with Kansas City and Houston
-  if(just_the_place$NAME =="Warsaw city, Missouri"){
-    just_the_place <- places[places$NAME=="Kansas City city, Missouri" ,]
-    city_block_groups <- bg[just_the_place, ]
-  }
+  ### using a buffered extraction
+  sf_plots_buffer <- st_buffer(sf_plots, dist = 1000)
   
-  # this catches an error with Houston 2021
-  if(just_the_place$NAME =="Howe town, Texas"){
-    just_the_place <- places[places$NAME=="Houston city, Texas" ,]
-    city_block_groups <- bg[just_the_place, ]
-  }
+  # it would be better to use st_intersection to create a weighted mean, but that was prohibitively slow and
+  # given that there are a very large number of block groups within each 3km2 circle, this should have a minor effect
+  city_block_groups_mean_pov <- dplyr::select(city_block_groups, estimate_c_perc_poverty)
+  buffered_plot_mean_pov <- aggregate(city_block_groups_mean_pov, sf_plots_buffer, mean, na.rm = TRUE)
   
-  # calculate block group area
-  city_block_groups<-  city_block_groups %>% mutate(area = st_area(.))
+  city_block_groups_mean_white <- dplyr::select(city_block_groups, estimate_c_perc_white)
+  buffered_plot_mean_white <- aggregate(city_block_groups_mean_white, sf_plots_buffer, mean, na.rm = TRUE)
   
+  pcv <- st_join(sf_plots, buffered_plot_mean_pov) 
+  pcv <- st_join(pcv, buffered_plot_mean_white)
+  pcv <- pcv %>% 
+         dplyr::mutate(lon = sf::st_coordinates(.)[,1],
+                       lat = sf::st_coordinates(.)[,2]) %>% 
+         st_drop_geometry(pcv) %>% 
+         mutate(city = str_extract(evals[i], "^\\D+")) #adding in the city
+  #dplyr::select(sf_plots_buffer, "PLT_CN", "income_full.estimate", "PLOT_STATUS_CD_LAB")
   
-  ## Use this intersect  to only use block groups in the city of baltimore
-  plot_census_value <- st_intersection(city_block_groups, sf_plots) %>% 
-    mutate(GEOID_11 = substring(GEOID, 1,11)) #extracting the GEOID of the census tract from the block group
-  
-  # Indicate which rows were initially NA from the census block group (these get filled with census tract later)
-  plot_census_value$na_block_group <- is.na(plot_census_value$estimate)
-  
-  
-  ### extracting median income values that are NA at the block group from the census tract level
-  tract <- get_acs(geography = "tract", 
-                   variables = c(medincome = "B19013_001"), 
-                   state = unique(sf_plots$state), 
-                   year = 2020,
-                   geometry = TRUE) 
-  
-  # calculate block group area
-  tract <-  tract %>% 
-    mutate(area = st_area(.))
-  
-  tract_join <- dplyr::select(tract, GEOID_11 = GEOID, estimate_tract = estimate,
-                              moe_tract = moe, tract_area = area) %>% 
-    st_drop_geometry()
+  # some visual tests
+  # plot(test["estimate_c_perc_poverty"])
+  # plot(bg["estimate_c_poverty"])
+  # plot(city_block_groups["estimate_c_poverty"])
+  # plot(city_block_groups_mean_pov)
+  # plot(buffered_plot_mean_pov)
+  # plot(pcv["estimate_c_perc_poverty"])
+  # plot(pcv["estimate_c_perc_white"])
   
   
-  plot_census_value_tract <- left_join(plot_census_value, tract_join) %>% 
-    mutate(estimate = case_when(is.na(estimate) ~ estimate_tract,
-                                TRUE ~ estimate),
-           moe = case_when(is.na(moe) ~ moe_tract,
-                           TRUE ~ moe),
-           GEOID = case_when(is.na(estimate) ~ GEOID_11,
-                             TRUE ~ GEOID),
-           area = case_when(is.na(estimate) ~ tract_area,
-                            TRUE ~ area)) %>% 
-    dplyr::select(-GEOID_11, -estimate_tract, -moe_tract, -tract_area)
-  
-  
-  ###########################################
-  
-  #overwrite the original dataframe with the version that filled in NA values in block group median income with tract values
-  plot_census_value <- plot_census_value_tract
-  
-  ###########################################   
-  
-  # identify which plots use block group values and which use tract values
-  plot_census_value[plot_census_value$GEOID %in% tract_join$GEOID, "is_tract_value" ] <- "tract value"
-  plot_census_value[is.na(plot_census_value$is_tract_value),"is_tract_value" ] <- "block group value"
-  
-  table(plot_census_value$is_tract_value)
-  table(plot_census_value$na_block_group)
-  
-  # turn spatial file into a dataframe.
-  pcv <- as.data.frame(plot_census_value)
-  
-  # clean up the columns saved in the excel file
-  pcv <- pcv[ , c("GEOID","PLT_CN","plot_number","estimate","moe","area","is_tract_value","na_block_group","PLOT_STATUS_CD_LAB")]
-  
-  ### extract race/ethnicity for each plot ########################
-  bg_race <- get_acs(geography = "block group", 
-                     variables = c(c_white = "B03002_003", c_black = "B03002_004", c_latinx = "B03002_012"), 
-                     #see description of race/ethnicity here: https://censusreporter.org/topics/race-hispanic/
-                     state = unique(sf_plots$state), 
-                     summary_var = "B03002_001",
-                     year = 2020,
-                     geometry = TRUE) %>% 
-    mutate(estimate_p = estimate/summary_est,
-           moe_p = moe/summary_est) %>%
-    dplyr::select(-estimate, -moe, - summary_est, -summary_moe) %>% 
-    st_drop_geometry() %>% #pivot_wider isn't working without this
-    tidyr::pivot_wider(names_from = variable, values_from = c(estimate_p, moe_p)) #c(estimate_p, moe_p))
-  
-  pcv <- left_join(pcv, bg_race)  
-  
-  ### other census variables: building age and neighborhood density ###############
-  # v17 <- load_variables(2020, "acs5", cache = TRUE)
-  # View(filter(v17, geography == "block group"))
-  bg_buildings <- get_acs(geography = "block group", 
-                          variables = c(c_building_age = "B25035_001",
-                                        c_pop = "B01003_001",
-                                        c_poverty_tot = "B17010_001",
-                                        c_poverty_below = "B17010_002"), 
-                          #see description of race/ethnicity here: https://censusreporter.org/topics/race-hispanic/
-                          state = unique(sf_plots$state), 
-                          year = 2020,
-                          geometry = TRUE) %>% 
-    mutate( area = st_area(.)) %>% 
-    st_drop_geometry() %>% #pivot_wider isn't working without this
-    tidyr::pivot_wider(names_from = variable, values_from = c(estimate, moe)) %>% 
-    mutate(people_km2 = estimate_c_pop / (as.numeric(area)/1000000),
-           estimate_c_poverty = estimate_c_poverty_below/estimate_c_poverty_tot,
-           estimate_c_building_age = case_when(estimate_c_building_age == 0 ~ NA, 
-                                               .default = estimate_c_building_age)) %>% 
-    select(-area)
-  
-  pcv <- left_join(pcv, bg_buildings)  
-  
-  
-  
-  #a few other book keeping options
-  pcv <- mutate(pcv, city = str_extract(evals[i], "^\\D+")) #adding in the city
   pcv_out <- rbind(pcv_out, pcv)
-  
-  
   print(str_extract(evals[i], "^\\D+")) 
 } #end UFIA data extraction loop
 
 
 ### save the file used in the analysis 
-csv_out_path <- file.path(here::here(),"out")
-#write.csv(pcv_out, file=file.path( csv_out_path, "plot_data_to_visualize.csv"))
+csv_out_path <- file.path(here::here())
+#write_csv(pcv_out, file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
+#pcv_out <- read_csv(file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
 
-#loading in the data from the 'tree census' project for the poor trees project ("script_for_charlie_v1.1.R")
-#pcv_out <- read_csv("C:/Users/dsk273/Documents/tree_census/data_to_analyze/plot_data_to_visualize.csv")
-
-
-
+#some QAQC on missing rows
+pcv$PLT_CN
 
 
 ### calculate pollen production for each individual adult tree #######################
@@ -394,13 +302,10 @@ pc <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on 
                                    IS_PLANTED == 2 ~ 0, #2 == natural origin
                                    IS_PLANTED == 3 ~ 0),
          street_tree = IS_STREET_TREE) %>% 
-  mutate(estimate_c_building_age = case_when(estimate_c_building_age == 0 ~ NA, #removing odd values
-                                             estimate_c_building_age > 100 ~ estimate_c_building_age)) %>%  
-  mutate(estimate_c_perc_poverty = 100 * estimate_c_poverty,
-         estimate_c_perc_white = 100 * estimate_p_c_white,
-         plot_perc_planted = 100 * trees_planted,
-         plot_perc_street_tree = 100 * street_tree) %>% 
-
+  
+mutate(plot_perc_planted = 100 * trees_planted,
+plot_perc_street_tree = 100 * street_tree) %>% 
+  
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
   filter(STATUSCD == 1 | STATUSCD == 2) %>%  #removing trees that weren't measured due to no longer being in the sample
   #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
