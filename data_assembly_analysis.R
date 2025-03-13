@@ -17,7 +17,6 @@ library(ggplot2)
 library(dplyr)
 library(sf)
 library(units)
-#library(plyr) #from Alex's script, should see if I can remove it to prevent namespace conflicts
 library(stringr)
 library(scales)
 library(here)
@@ -334,21 +333,93 @@ plots_per_city <- left_join( all_trees_pollen_prod, pcv_out) %>%
   dplyr::count(city) %>% 
   dplyr::rename(n_plots = n)
 
+plots_per_city %>%  ungroup() %>% 
+  filter( !is.na(city)) %>% 
+  summarize(n = sum(n_plots))
+  
 pc <- left_join(pc, plots_per_city)
 
 #check on any values where the census info didn't get through
 #test <- pc %>% filter(is.na(estimate_c_perc_poverty))
 
-### Fig 1: pollen production by city and genus #################################
-pc %>% 
+### Fig 1: basal area by city and genus #################################
+pc_npp <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on why so many of the rows are missing info from pcv_out
+  mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
+                                 STATUSCD == 1 ~ 1)) %>% 
+  filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
+  filter(STATUSCD == 1 ) %>%  #removing trees that weren't measured due to no longer being in the sample
+  filter(city %in% NE_cities_not_eval)
+
+#currently this doesn't include plots without any trees nor strata corrections
+area_per_city <- left_join( all_trees_pollen_prod, pcv_out) %>%  
+  dplyr::group_by(city) %>% 
+  dplyr::select(PLT_CN) %>% 
+  dplyr::distinct() %>% 
+  dplyr::count(city) %>% 
+  dplyr::rename(n_plots = n) %>% 
+  mutate(area_per_city = n_plots * 672.4535)  # Plot area in m2 = 672.4535)
+
+BA_sum_city <- 
+  pc_npp %>% 
+  mutate( dbh_cm = DIA * 2.54 * 0.5, #convert diameter in inches to radius in cm
+          tree_BA_m2 = (pi * dbh_cm^2)/10000) %>%  
+  dplyr::group_by(city) %>% 
+  dplyr::summarize(
+    BA_sum_city = sum(tree_BA_m2),
+    n_trees_city = n())
+    
+#visualize results
+pc_npp %>% 
+  mutate( dbh_cm = DIA * 2.54 * 0.5, #convert diameter in inches to radius in cm
+          tree_BA_m2 = (pi * dbh_cm^2)/10000) %>%  
+  group_by(city, Genus) %>% 
+  dplyr::summarize(BA_sum = sum(tree_BA_m2)) %>% 
+  ungroup() %>% 
+  left_join(., area_per_city) %>% 
+  left_join(., BA_sum_city) %>% 
+  mutate(Genus = case_when(BA_sum / BA_sum_city < .02 ~ "other",
+                           BA_sum / BA_sum_city >= 0.02 ~ Genus),
+         area_per_city_ha = area_per_city/10000) %>%
+   ggplot(aes(x = city, y = BA_sum/area_per_city_ha, fill = Genus)) + geom_col() + theme_bw() +
+  ylab(bquote(basal~area~(m^2~"/"~ha))) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "light")
+
+
+
+
+
+### Fig 2 ###################################
+fig1a <- pc %>% 
   dplyr::group_by(city, n_plots, Genus) %>% 
   dplyr::summarize(pol_sum = sum(pol_mean),
-            pol_sum_city = pol_sum/n_plots) %>% 
-  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
-  ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
-  ylab("average pollen production per plot (millions of grains)") + 
+            pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
+  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT. MAYBE WEIRD REMNANT ERRORS FROM PLYR?
+  ggplot(aes(x = city, y = pol_sum_m2*1000, fill = Genus)) + geom_col() + theme_bw() +
+  ylab(bquote("pollen per"~m^2~" of land (in 1,000 grains)")) + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
   grafify::scale_fill_grafify(palette = "fishy")
+
+
+ba_per_city <- 
+  pc %>% 
+  mutate( dbh_cm = DIA * 2.54 * 0.5, #convert diameter in inches to radius in cm
+          BA_m2 = (pi * dbh_cm^2)/1000) %>%  #calculate area of circle in cm2 and then convert to m2 
+  dplyr::group_by(city) %>% 
+  dplyr::summarize(BA_sum_city = sum(BA_m2))
+  
+fig1b <- pc %>% 
+  dplyr::group_by(city, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  left_join(., ba_per_city) %>% 
+  mutate(pol_BA = pol_sum/BA_sum_city) %>% 
+  ggplot(aes(x = city, y = pol_BA, fill = Genus)) + geom_col() + theme_bw() +
+  ylab(bquote("pollen per basal area (1,000,000 grains/"~m^2~")" )) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy")
+
+cowplot::plot_grid(fig1a, fig1b, nrow = 2)
+
 
 ### Fig 2: plot level pollen production as a function of poverty ###############
 
@@ -437,4 +508,6 @@ pc %>%
   dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
   ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
 
+### export the dataframe for keily ###########
+write_csv(pc, file = "pc.csv")
 
