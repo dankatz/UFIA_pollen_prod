@@ -1,5 +1,4 @@
-#This script is for quantifying pollen production in US cities included in the UFIA 
-#It uses jittered plot locations instead of using actual plot locations when comparing to US Census data
+#This script is for quantifying pollen production in northeastern and midwestern US cities included in the UFIA 
 #Author: Daniel Katz (dankatz@cornell.edu), to be used for Keily Peralta's senior thesis
 # Pieces of the script are borrowed from Alex Young's work on the 'Poor Trees' project
 
@@ -18,6 +17,7 @@ library(dplyr)
 library(sf)
 library(units)
 library(stringr)
+library(stringi)
 library(scales)
 library(here)
 library(stringdist)
@@ -51,6 +51,7 @@ NE_cities <- c("BaltimoreMD2022Curr", "BurlingtonVT2022Curr",  "ChicagoIL2022Cur
                "MadisonWI2022Curr",  "MilwaukeeWI2022Curr",  "MinneapolMN2022Curr",
                "PittsburghPA2022Curr", "PortlandME2022Curr", 
                "ProvidenceRI2022Curr", "RochesterNY2022Curr", "TrentonNJ2022Curr", "WashingtonDC2022Curr" )
+
 NE_cities_not_eval <- c("BaltimoreMD", "BurlingtonVT",  "ChicagoIL", "ClevelandOH",   "DesMoinesIA",  
                         "MadisonWI",  "MilwaukeeWI",  "MinneapolMN","PittsburghPA", "PortlandME", 
                         "ProvidenceRI", "RochesterNY", "TrentonNJ", "WashingtonDC" )
@@ -74,12 +75,11 @@ plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plo
 
 
 
-############ this section is copied from the poor trees project, rolling with it for now although
-# it should ultimately be switched so it's for a buffer or sent to Charlie for use with the 
-# original plot locations
-# another issue is the scaling factor, should ask Alex about how to deal with that
 
-######   Now get census tract data for each city ############################### 
+
+######  get census tract data for each city ############################### 
+# this section is copied from the poor trees project
+
 #including additional cities that were available on 11/23/2024
 evals <- NE_cities
 # evals <- c("AustinTX2022Curr", "BaltimoreMD2022Curr", "BurlingtonVT2022Curr",  "ChicagoIL2022Curr",
@@ -134,7 +134,6 @@ for(i in c(1:length(evals))){   # to run all cities.
                               c_pop = "B01003_001",
                               c_poverty_tot = "B17010_001",
                               c_poverty_below = "B17010_002"),
-                #summary_var = ,        
                 state = unique(sf_plots$state), 
                 year = 2020,
                 geometry = TRUE) %>% 
@@ -168,7 +167,7 @@ for(i in c(1:length(evals))){   # to run all cities.
   }
      
 
-  ### using a buffered extraction
+  ### using a buffered extraction to extract poverty and race
   sf_plots_buffer <- st_buffer(sf_plots, dist = 1000)
 
   # it would be better to use st_intersection to create a weighted mean, but that was prohibitively slow and
@@ -214,7 +213,7 @@ csv_out_path <- file.path(here::here())
 #pcv_out <- read_csv(file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
 
 
-#some QAQC on missing rows
+#some QAQC on rows that are missing poverty data
 pcv$PLT_CN
 names(pcv_out)
 pcv_out %>% 
@@ -229,7 +228,6 @@ ggplot(aes(x = lon, y = lat, col = estimate_c_perc_poverty)) + geom_point()
 
 
 ### calculate pollen production for each individual adult tree #######################
-
 ref_species_join <- ref_species %>% select(SPCD, GENUS, SPECIES, COMMON_NAME)
 
 all_trees_for_pollen_prod <- left_join(mtre, ref_species_join) %>% 
@@ -309,15 +307,14 @@ all_trees_pollen_prod <- left_join(all_trees_for_pollen_prod, indiv_tree_pol_pre
 
 ### combining the plot and census data with the individual tree data ###########
 
-pc <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on why so many of the rows are missing info from pcv_out
+pc <- left_join( all_trees_pollen_prod, pcv_out) %>% 
   mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
                                  STATUSCD == 1 ~ 1),
          trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
                                    IS_PLANTED == 2 ~ 0, #2 == natural origin
-                                   IS_PLANTED == 3 ~ 0),
-         street_tree = IS_STREET_TREE) %>% 
-  
-  mutate(plot_perc_planted = 100 * trees_planted,
+                                   IS_PLANTED == 3 ~ NA),
+         street_tree = IS_STREET_TREE,
+         plot_perc_planted = 100 * trees_planted,
          plot_perc_street_tree = 100 * street_tree) %>% 
   
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
@@ -337,13 +334,107 @@ plots_per_city %>%  ungroup() %>%
   filter( !is.na(city)) %>% 
   summarize(n = sum(n_plots))
   
-pc <- left_join(pc, plots_per_city)
+pc <- left_join(pc, plots_per_city) %>% 
+  mutate(city = stri_sub(city, 1, -3), #remove state from city name for figures
+         city = case_when(city == "Minneapol" ~ "Minneapolis", .default = city)) #expanding truncated name
 
-#check on any values where the census info didn't get through
-#test <- pc %>% filter(is.na(estimate_c_perc_poverty))
+  #check on any values where the census info didn't get through
+  #test <- pc %>% filter(is.na(estimate_c_perc_poverty))
 
-### Fig 1: basal area by city and genus #################################
-pc_npp <- left_join( all_trees_pollen_prod, pcv_out) %>%  #Need to do some QA/QC on why so many of the rows are missing info from pcv_out
+
+### statistics for paper ################################################
+
+#summing across taxa, which cities have the highest pollen production
+pc %>% 
+  dplyr::group_by(city, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  
+  group_by(city) %>% 
+  summarize(pol_sum_m2_mean = sum(pol_sum_m2)) %>% 
+  arrange(-pol_sum_m2_mean)
+
+#averaging across cities, which taxa have the highest pollen production
+pc %>% 
+  dplyr::group_by(city, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  
+  group_by(Genus) %>% 
+  summarize(pol_sum_m2_mean = mean(pol_sum_m2),
+            pol_sum_m2_sd = sd(pol_sum_m2)) %>% 
+  arrange(-pol_sum_m2_mean)
+
+#across cities, what proportion of pollen is from planted vs unplanted trees
+planted_vs_unplanted <- 
+  pc %>%
+  mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
+                                         trees_planted == 1 ~ "planted",
+                                         is.na(trees_planted) ~ "unknown")) %>% 
+  dplyr::group_by(city, trees_planted_label, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%   # Plot area in m2 = 672.4535
+  group_by(city, trees_planted_label) %>% 
+  summarize(pol_sum_m2_sum = sum(pol_sum_m2)) %>% 
+  group_by(trees_planted_label) %>% 
+  summarize(pol_sum_m2_sum_mean = mean(pol_sum_m2_sum))
+
+planted_vs_unplanted$pol_sum_m2_sum_mean[planted_vs_unplanted$trees_planted_label == "planted"] /
+( planted_vs_unplanted$pol_sum_m2_sum_mean[planted_vs_unplanted$trees_planted_label == "planted"] + 
+  planted_vs_unplanted$pol_sum_m2_sum_mean[planted_vs_unplanted$trees_planted_label == "natural"])
+  
+
+#across cities, what proportion of pollen is from street trees
+street_vs_non_street <- 
+  pc %>%
+  mutate(street_tree_label = case_when(street_tree == 0 ~ "not a street tree",
+                                       street_tree == 1 ~ "street tree")) %>% 
+  dplyr::group_by(city, street_tree_label, n_plots, Genus) %>%
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>%  
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>% # Plot area in m2 = 672.4535
+  group_by(city, street_tree_label) %>% 
+  summarize(pol_sum_m2_sum = sum(pol_sum_m2)) %>% 
+  group_by(street_tree_label) %>% 
+  summarize(pol_sum_m2_sum_mean = mean(pol_sum_m2_sum))
+
+street_vs_non_street$pol_sum_m2_sum_mean[street_vs_non_street$street_tree_label == "street tree"] /
+  ( street_vs_non_street$pol_sum_m2_sum_mean[street_vs_non_street$street_tree_label == "not a street tree"] + 
+      street_vs_non_street$pol_sum_m2_sum_mean[street_vs_non_street$street_tree_label == "street tree"])
+
+
+
+
+### Fig 1 pollen production per genus ###################################
+fig1a <- pc %>% 
+  dplyr::group_by(city, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
+  ggplot(aes(x = city, y = pol_sum_m2*1000, fill = Genus)) + geom_col() + ggthemes::theme_few() +
+  ylab(bquote("pollen per land area (1,000 grains/"~m^2~")")) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy")
+
+
+ba_per_city <- 
+  pc %>% 
+  mutate( dbh_cm = DIA * 2.54 * 0.5, #convert diameter in inches to radius in cm
+          BA_m2 = (pi * dbh_cm^2)/1000) %>%  #calculate area of circle in cm2 and then convert to m2 
+  dplyr::group_by(city) %>% 
+  dplyr::summarize(BA_sum_city = sum(BA_m2))
+
+fig1b <- pc %>% 
+  dplyr::group_by(city, n_plots, Genus) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  left_join(., ba_per_city) %>% 
+  mutate(pol_BA = pol_sum/BA_sum_city) %>% 
+  ggplot(aes(x = city, y = pol_BA, fill = Genus)) + geom_col() + ggthemes::theme_few() +
+  ylab(bquote("pollen per basal area (1,000,000 grains/"~m^2~")" )) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy")
+
+cowplot::plot_grid(fig1a, fig1b, nrow = 2)
+
+
+### Fig 2: basal area by city and genus #################################
+pc_npp <- left_join( all_trees_pollen_prod, pcv_out) %>% 
   mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
                                  STATUSCD == 1 ~ 1)) %>% 
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
@@ -379,55 +470,78 @@ pc_npp %>%
   left_join(., BA_sum_city) %>% 
   mutate(Genus = case_when(BA_sum / BA_sum_city < .02 ~ "other",
                            BA_sum / BA_sum_city >= 0.02 ~ Genus),
-         area_per_city_ha = area_per_city/10000) %>%
-   ggplot(aes(x = city, y = BA_sum/area_per_city_ha, fill = Genus)) + geom_col() + theme_bw() +
+         area_per_city_ha = area_per_city/10000) %>% 
+  mutate(city = stri_sub(city, 1, -3),
+         city = case_when(city == "Minneapol" ~ "Minneapolis", .default = city)) %>%
+   ggplot(aes(x = city, y = BA_sum/area_per_city_ha, fill = Genus)) + geom_col() + ggthemes::theme_few() +
   ylab(bquote(basal~area~(m^2~"/"~ha))) + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
   grafify::scale_fill_grafify(palette = "light")
 
+#ggsave("C:/Users/dsk273/Box/writing/UFIA pollen production/fig2_ba_by_city.pdf", height = 1500, width = 3000, units = "px")
 
 
 
 
-### Fig 2 ###################################
-fig1a <- pc %>% 
-  dplyr::group_by(city, n_plots, Genus) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean),
-            pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
-  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT. MAYBE WEIRD REMNANT ERRORS FROM PLYR?
-  ggplot(aes(x = city, y = pol_sum_m2*1000, fill = Genus)) + geom_col() + theme_bw() +
-  ylab(bquote("pollen per"~m^2~" of land (in 1,000 grains)")) + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
-  grafify::scale_fill_grafify(palette = "fishy")
-
-
-ba_per_city <- 
-  pc %>% 
-  mutate( dbh_cm = DIA * 2.54 * 0.5, #convert diameter in inches to radius in cm
-          BA_m2 = (pi * dbh_cm^2)/1000) %>%  #calculate area of circle in cm2 and then convert to m2 
-  dplyr::group_by(city) %>% 
-  dplyr::summarize(BA_sum_city = sum(BA_m2))
-  
-fig1b <- pc %>% 
-  dplyr::group_by(city, n_plots, Genus) %>% 
+### Fig 3: differences in pollen production between planted and natural trees ################
+pc %>%
+  mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
+                                         trees_planted == 1 ~ "planted",
+                                         is.na(trees_planted) ~ "unknown")) %>% 
+   dplyr::group_by(city, trees_planted_label, n_plots, Genus) %>% 
   dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
-  left_join(., ba_per_city) %>% 
-  mutate(pol_BA = pol_sum/BA_sum_city) %>% 
-  ggplot(aes(x = city, y = pol_BA, fill = Genus)) + geom_col() + theme_bw() +
-  ylab(bquote("pollen per basal area (1,000,000 grains/"~m^2~")" )) + 
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
+ 
+   ggplot(aes(x = city, y = pol_sum_m2*1000000, fill = Genus)) + geom_col() + ggthemes::theme_few() +
+  ylab(bquote("pollen production (pollen grains /  "~m^2~")")) + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
-  grafify::scale_fill_grafify(palette = "fishy")
-
-cowplot::plot_grid(fig1a, fig1b, nrow = 2)
+  grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~trees_planted_label, ncol = 1)
 
 
-### Fig 2: plot level pollen production as a function of poverty ###############
+### Fig 4: differences between street trees and non-street trees #################
+pc %>%
+  mutate(street_tree_label = case_when(street_tree == 0 ~ "not a street tree",
+                                       street_tree == 1 ~ "street tree")) %>% 
+  dplyr::group_by(city, street_tree_label, n_plots, Genus) %>%
+  dplyr::summarize(pol_sum = sum(pol_mean)) %>%  
+  mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>% # Plot area in m2 = 672.4535
+  ggplot(aes(x = city, y = pol_sum_m2*1000000, fill = Genus)) + geom_col() + ggthemes::theme_few() +
+  ylab(bquote("pollen production (grains / "~m^2~")")) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~street_tree_label, ncol = 1)
+
+
+### SI: are there associations between poverty and pollen production for any tree genera ##########
+pc %>% 
+  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white, Genus) %>% 
+  dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
+  ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot, color = city)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
+
+### SI: misc sub-analyses ####################
+pc %>% 
+  filter(street_tree == 1) %>% 
+  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white, Genus) %>% 
+  dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
+  ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
+
+### misc stats and other things  ###########
+
+pc %>% select(PLT_CN) %>% distinct() %>%  summarize(n = n())
+
+# export the dataframe for keily
+write_csv(pc, file = "pc.csv")
+
+
+
+
+
+### SI 1: plot level pollen production as a function of poverty ###############
 
 plot_summary <- pc %>% 
   dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white) %>% 
   dplyr::summarize(pol_sum_plot = sum(pol_mean))
 
-  
+
 #do some stats
 m1 <- lmer(pol_sum_plot ~ (1|city) + estimate_c_perc_poverty, data = plot_summary)
 m1_summary <- summary(m1) #plot(m1)
@@ -445,7 +559,7 @@ sjPlot::plot_model(m1, type = "pred") +
 
 
 
-### Fig 3: plot level pollen production as a function of race/ethnicity ########
+### SI 2: plot level pollen production as a function of race/ethnicity #############
 plot_summary <- pc %>% 
   dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white) %>% 
   dplyr::summarize(pol_sum_plot = sum(pol_mean))
@@ -464,50 +578,4 @@ sjPlot::plot_model(m2, type = "pred") +
   ggthemes::theme_few() + scale_color_discrete()+
   ggtitle("association between race and pollen production")+
   annotate("text", x = 50, y = 3000, label = paste0("y = ", m2_slope, " * x + ", m2_intercept, ", p = ", m2_slope_p)) 
-
-
-
-### Fig 4: differences in pollen production between planted and natural trees ################
-pc %>%
-  mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
-                                         trees_planted == 1 ~ "planted")) %>% 
-  dplyr::group_by(city, trees_planted_label, Genus) %>%
-  dplyr::summarize(pol_sum = sum(pol_mean),
-                   pol_sum_city = pol_sum/n_plots) %>%
-  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
-  ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
-  ylab("average pollen production per plot (millions of grains)") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
-  grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~trees_planted_label, ncol = 1)
-
-
-### Fig 5: differences between street trees and non-street trees #################
-pc %>%
-  mutate(street_tree_label = case_when(street_tree == 0 ~ "not a street tree",
-                                       street_tree == 1 ~ "street tree")) %>% 
-  dplyr::group_by(city, street_tree_label, Genus) %>%
-  dplyr::summarize(pol_sum = sum(pol_mean),
-                   pol_sum_city = pol_sum/n_plots) %>%
-  distinct() %>% #NOT SURE WHY THIS ISNT BEHAVING WELL, NEED TO CHECK UP ON IT
-  ggplot(aes(x = city, y = pol_sum_city, fill = Genus)) + geom_col() + theme_bw() +
-  ylab("average pollen production per plot (millions of grains)") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
-  grafify::scale_fill_grafify(palette = "fishy") + facet_wrap(~street_tree_label, ncol = 1)
-
-
-### SI: are there associations between poverty and pollen production for any tree genera ##########
-pc %>% 
-  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white, Genus) %>% 
-  dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
-  ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot, color = city)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
-
-### SI: misc sub-analyses ####################
-pc %>% 
-  filter(street_tree == 1) %>% 
-  dplyr::group_by(city, PLT_CN, estimate_c_perc_poverty, estimate_c_perc_white, Genus) %>% 
-  dplyr::summarize(pol_sum_plot = sum(pol_mean)) %>% 
-  ggplot(aes(x = estimate_c_perc_white , y = pol_sum_plot)) + geom_point() + geom_smooth(method = "lm") + facet_wrap(~Genus)
-
-### export the dataframe for keily ###########
-write_csv(pc, file = "pc.csv")
 
