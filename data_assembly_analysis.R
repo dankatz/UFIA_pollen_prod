@@ -39,9 +39,9 @@ options(tigris_use_cache = TRUE)
 #set the directory for the UFIA files:
 UFIA_file_path <- "C:/Users/dsk273/Documents/tree_census"
 
-# obtain your own US Census API key, via the following URL:
-census_key <- read.table("C:/Users/dsk273/Documents/UFIA_pollen_prod/US census key.txt", stringsAsFactors = F, header = F)
-census_api_key(census_key[1], install = TRUE, overwrite = TRUE)
+# # obtain your own US Census API key, via the following URL:
+# census_key <- read.table("C:/Users/dsk273/Documents/UFIA_pollen_prod/US census key.txt", stringsAsFactors = F, header = F)
+# census_api_key(census_key[1], install = TRUE, overwrite = TRUE)
 
 
 
@@ -73,178 +73,84 @@ ref_species_group <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTI
 plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plot_status$VALUE)]
 
 
+### compile UFIA dataset ########################################################
 
+## join the within-plot datasets
+  ref_species_join <- ref_species %>% select(SPCD, GENUS, SPECIES, COMMON_NAME)
+  
+  mtre_join <- mtre %>% 
+    select(TREE, SUBP,  STATUSCD, SPCD, DIA, CROWN_DIA_WIDE, CROWN_DIA_90, AVG_CROWN_WIDTH, IS_STREET_TREE, IS_PLANTED, BASAL_AREA,
+           CN, PLT_CN, SBP_CN, CND_CN) %>% 
+    left_join(., ref_species_join)
+  
+  plt_join <- plt %>% 
+    select(MEAS_YEAR, MEAS_MONTH, MEAS_DAY, PLOT_STATUS_CD, PLOT_NONSAMPLE_REASN_CD, LAT, LON, CN) %>% 
+    rename(PLT_CN = CN)
+  
+  mtre_plt <- left_join(mtre_join, plt_join) 
+  
 
+#get the meta-plot data and then filter down to just target cities in just target years
+  psca_join <- psca %>% 
+    rename(psca_cn = CN,
+           psca_PLT_CN = PLT_CN,
+           psca_PSC_CN = PSC_CN)
+  
+  psc_join <- psc # %>%  filter(EVALID %in% NE_cities)
+  
+  psc_psca <- left_join(psca_join, psc_join, by = c("psca_PSC_CN" = "CN")) %>% 
+          filter(EVALID %in% NE_cities)
+  
+#add meta plot data to the tree-level data
+  pcv <- left_join(mtre_plt, psc_psca, by = c("PLT_CN" = "psca_PLT_CN")) %>% 
+    filter(!is.na(EVALID)) %>% 
+    mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
+                                   STATUSCD == 1 ~ 1),
+           trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
+                                     IS_PLANTED == 2 ~ 0, #2 == natural origin
+                                     IS_PLANTED == 3 ~ NA),
+           street_tree = IS_STREET_TREE,
+           plot_perc_planted = 100 * trees_planted,
+           plot_perc_street_tree = 100 * street_tree,
+           city_state = gsub(pattern = "City of ", replacement = "", x = ESTN_UNIT_NAME), 
+           city = stri_sub(city_state, 1, -5), #remove state from city name for figures
+           city = case_when(city == "Portland, ME Urban Area:Portland" ~ "Portland, ME",
+                              city == "Trenton, NJ Urban " ~ "Trenton",
+                              .default = city),
+           Genus = GENUS,
+           Species = gsub("^\\S+ ", "", SPECIES),
+           dbh_cm = DIA *2.54,
+           tree_BA = 0.00007854 * dbh_cm^2,
+           tree_can_diam_ft = case_when( !is.na(CROWN_DIA_WIDE) ~  (CROWN_DIA_WIDE + CROWN_DIA_90)/2,
+                                         is.na(CROWN_DIA_WIDE) ~  AVG_CROWN_WIDTH), #use modeled width when diameter wasn't measured
+           tree_can_diam_m = tree_can_diam_ft * 0.3048,
+           tree_can_radius_m = tree_can_diam_m/2,
+           tree_area = pi * (tree_can_radius_m^2), #convert crown radius in m to m2
+           id = row_number()) %>% 
+    filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
+    filter(STATUSCD == 1 | STATUSCD == 2) %>% #removing trees that weren't measured due to no longer being in the sample
+    #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
+    filter(trees_alive == 1)  #removing dead trees
 
-
-######  get census tract data for each city ############################### 
-# this section is copied from the poor trees project
-
-#including additional cities that were available on 11/23/2024
-evals <- NE_cities
-# evals <- c("AustinTX2022Curr", "BaltimoreMD2022Curr", "BurlingtonVT2022Curr",  "ChicagoIL2022Curr",
-#            "ClevelandOH2022Curr",  "DesMoinesIA2022Curr", "HoustonTX2022Curr", "KansasCityMO2022Curr",
-#            "MadisonWI2022Curr",  "MilwaukeeWI2022Curr",  "MinneapolMN2022Curr",  "PittsburghPA2022Curr",
-#            "PortlandME2022Curr", "PortlandOR2022Curr", "ProvidenceRI2022Curr", "RochesterNY2022Curr", 
-#            "SanAntonioTX2022Curr", "SanDiegoCA2022Curr", "SpringfielMO2020Curr", "StLouisMO2022Curr",    
-#            "TrentonNJ2022Curr", "WashingtonDC2022Curr" )
-
-pcv_out <- list() 
-for(i in c(1:length(evals))){   # to run all cities. 
-  
-  # Specify the EVALID (evaluation ID)
-  city_choose <- evals[i]  #city_choose <- evals[11]
-  
-  # subset the Pop stratum Calc (psc) table for a single evaluation
-  ## The rows provide the NLCD-based area expansion factors, each plot is assigned to one.
-  Stratum <- psc[psc$EVALID == city_choose ,]
-  Stratum$STRATUM_CN <- as.factor(Stratum$CN)
   
   
-  # parse Stratum dataframe to identify the city
-  parsed_city_name <- sub(" [0-9]{4}.*", "", unique(Stratum$EVAL_NAME))
-  
-  ## now find which plots are associated with each strata using the psca table.
-  ##  Plot stratum calc assign- has plot (PLT_CN) and Stratum (PSC_CN) pairings.
-  Plot <- psca[psca$PSC_CN %in% Stratum$CN ,]
-  
-  # bring the lat and lon over from the plot  (plt) table.
-  Plot$LON <- plt$LON[match(Plot$PLT_CN, plt$CN)]
-  Plot$LAT <- plt$LAT[match(Plot$PLT_CN, plt$CN)]
-  
-  # include label for plot status
-  Plot$PLOT_STATUS_CD_LAB <- plt$PLOT_STATUS_CD_LAB[match(Plot$PLT_CN, plt$CN)]
-  
-  # Add the eval ID to the Plot dataframe
-  Plot$EVALID <- city_choose
-  
-  # Set CRS of Plot df to nad 83
-  sf_plots <-  st_as_sf(Plot, coords = c("LON", "LAT"),crs = 4269) #filter(sf_plots, PLT_CN == "354918270489998")
-  
-  # bring in state code for census API
-  sf_plots$state <- plt$STATECD[match(sf_plots$PLT_CN, plt$CN)]
-  
-  # ### Retrieve the block group income values for the state.
-  # bg <- get_acs(geography = "block group", 
-  #               variables = c(medincome = "B19013_001", 
-  #                             c_white = "B03002_003", c_black = "B03002_004", c_latinx = "B03002_012", 
-  #                             c_all_races_ethnicities = "B03002_001",
-  #                             #see description of race/ethnicity here: https://censusreporter.org/topics/race-hispanic/
-  #                             c_building_age = "B25035_001",
-  #                             c_pop = "B01003_001",
-  #                             c_poverty_tot = "B17010_001",
-  #                             c_poverty_below = "B17010_002"),
-  #               state = unique(sf_plots$state), 
-  #               year = 2020,
-  #               geometry = TRUE) %>% 
-  #    tidyr::pivot_wider(names_from = variable, values_from = c(estimate, moe)) %>% 
-  #    mutate(area = st_area(.)) %>% 
-  #    mutate(people_km2 = estimate_c_pop / (as.numeric(area)/1000000),
-  #          estimate_c_poverty = estimate_c_poverty_below/estimate_c_poverty_tot,
-  #          estimate_c_perc_poverty = 100 * estimate_c_poverty,
-  #          estimate_c_perc_white = 100 * (estimate_c_white/estimate_c_all_races_ethnicities),
-  #          estimate_c_building_age = case_when(estimate_c_building_age < 100 ~ NA,  #removing odd values
-  #                                              .default = estimate_c_building_age))
-  # 
-  # places <- get_acs(geography = "place", 
-  #                   variables = c(medincome = "B19013_001"), 
-  #                   state = unique(sf_plots$state), 
-  #                   year = 2020,
-  #                   geometry = TRUE) 
-  #    
-  # # Find the index of the best match
-  # best_match_index <- stringdist::amatch(parsed_city_name, places$NAME , maxDist = Inf)
-  # 
-  # # Get the best matching row from the dataframe
-  # just_the_place <- places[best_match_index, ]
-  # 
-  # # spatial subset of the state block groups by the city place boundary
-  # city_block_groups <- bg[just_the_place, ]
-  # 
-  # #it looks like "Trenton, NJ" actually includes Princeton and some areas outside the city too
-  # if(parsed_city_name == "Trenton, NJ"){ 
-  #   city_block_groups <-  st_crop(bg, xmin = -75, ymin = 40, xmax = -74, ymax = 40.5) #plot(bg_test["estimate_c_white"])
-  # }
-  #    
-  # 
-  # ### using a buffered extraction to extract poverty and race
-  # sf_plots_buffer <- st_buffer(sf_plots, dist = 1000)
-  # 
-  # # it would be better to use st_intersection to create a weighted mean, but that was prohibitively slow and
-  # # given that there are a very large number of block groups within each 3km2 circle, this should have a minor effect
-  # city_block_groups_mean_pov <- dplyr::select(city_block_groups, estimate_c_perc_poverty)
-  # buffered_plot_mean_pov <- aggregate(city_block_groups_mean_pov, sf_plots_buffer, mean, na.rm = TRUE) %>% 
-  #   st_centroid() %>% st_buffer(1) #adding this in to remove rounding errors from points when trying to join later
-  # 
-  # city_block_groups_mean_white <- dplyr::select(city_block_groups, estimate_c_perc_white)
-  # buffered_plot_mean_white <- aggregate(city_block_groups_mean_white, sf_plots_buffer, mean, na.rm = TRUE)%>% 
-  #   st_centroid() %>% st_buffer(1) #adding this in to remove rounding errors from points when trying to join later
-  # 
-  # pcv <- st_join(sf_plots, buffered_plot_mean_pov) 
-  # pcv <- st_join(pcv, buffered_plot_mean_white)
-  # pcv <- pcv %>% 
-  #        dplyr::mutate(lon = sf::st_coordinates(.)[,1],
-  #                      lat = sf::st_coordinates(.)[,2]) %>% 
-  #        st_drop_geometry(pcv) %>% 
-  #        mutate(city = str_extract(evals[i], "^\\D+")) #adding in the city
-  # #dplyr::select(sf_plots_buffer, "PLT_CN", "income_full.estimate", "PLOT_STATUS_CD_LAB")
-  
-  # some visual tests
-  # plot(just_the_place["estimate"])
-  # plot(buffered_plot_mean_pov)
-  # plot(bg["estimate_c_poverty"])
-  # plot(city_block_groups["estimate_c_poverty"])
-  # plot(city_block_groups_mean_pov)
-  # plot(buffered_plot_mean_pov %>% st_buffer(500))
-  # plot(pcv["estimate_c_perc_poverty"])
-  # plot(pcv["estimate_c_perc_white"])
-  
-  
-  pcv_out <- rbind(pcv_out, pcv)
-  print(str_extract(evals[i], "^\\D+")) 
-} #end UFIA data extraction loop
-
-
-
+## calculate the number of plots in the city in that census (including plots without trees)  
+  plots_per_city <-
+    psc_psca %>% 
+    group_by(POPULATION_NAME) %>% 
+    summarize(n_plots = n())
+  pcv <- left_join(pcv, plots_per_city) 
 
 ### save the file used in the analysis 
-csv_out_path <- file.path(here::here())
-#write_csv(pcv_out, file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
-#pcv_out <- read_csv(file = file.path( csv_out_path, "plot_data_to_visualize.csv"))
-
-
-# #some QAQC on rows that are missing poverty data
-# pcv$PLT_CN
-# names(pcv_out)
-# pcv_out %>% 
-#   group_by(city) %>% 
-#   summarise(sum_na = sum(is.na(estimate_c_perc_poverty)))
-#     
-# pcv_out %>% 
-#   filter(city == "MadisonWI") %>% 
-# ggplot(aes(x = lon, y = lat, col = estimate_c_perc_poverty)) + geom_point()   
-
-
+  csv_out_path <- file.path(here::here())
+  #write_csv(pcv, file = file.path( csv_out_path, "tree_data_251031.csv"))
+  #pcv <- read_csv(file = file.path( csv_out_path, "tree_data_251031.csv"))
 
 
 ### calculate pollen production for each individual adult tree #######################
-ref_species_join <- ref_species %>% select(SPCD, GENUS, SPECIES, COMMON_NAME)
+all_trees_for_pollen_prod <- pcv 
 
-all_trees_for_pollen_prod <- left_join(mtre, ref_species_join) %>% 
-  select(PLT_CN, SPCD, SUBP, STATUSCD, IS_PLANTED, BASAL_AREA, DIA, IS_STREET_TREE,
-         GENUS, SPECIES, COMMON_NAME, CROWN_DIA_WIDE, CROWN_DIA_90, AVG_CROWN_WIDTH) %>% 
-  dplyr::mutate(Genus = GENUS,
-         Species = gsub("^\\S+ ", "", SPECIES),
-         dbh_cm = DIA *2.54,
-         tree_BA = 0.00007854 * dbh_cm^2,
-         tree_can_diam_ft = case_when( !is.na(CROWN_DIA_WIDE) ~  (CROWN_DIA_WIDE + CROWN_DIA_90)/2,
-                                         is.na(CROWN_DIA_WIDE) ~  AVG_CROWN_WIDTH), #use modeled width when diameter wasn't measured
-         tree_can_diam_m = tree_can_diam_ft * 0.3048,
-         tree_can_radius_m = tree_can_diam_m/2,
-         tree_area = pi * (tree_can_radius_m^2), #convert crown radius in m to m2
-         id = row_number())
-
-#calculate pollen production for each individual tree, now including SDs
+#calculate pollen production for each individual tree, using a loop allows SDs to be calculated
 for(i in 1:100){
 
 ### canopy area
@@ -429,61 +335,6 @@ all_trees_pollen_prod %>%
 
 
 
-### combining the plot and census data with the individual tree data ###########
-
-pc <- left_join( all_trees_pollen_prod, pcv_out) %>% 
-  mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
-                                 STATUSCD == 1 ~ 1),
-         trees_planted = case_when(IS_PLANTED == 1 ~ 1, #1 == planted
-                                   IS_PLANTED == 2 ~ 0, #2 == natural origin
-                                   IS_PLANTED == 3 ~ NA),
-         street_tree = IS_STREET_TREE,
-         plot_perc_planted = 100 * trees_planted,
-         plot_perc_street_tree = 100 * street_tree) %>% 
-  
-  filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
-  filter(STATUSCD == 1 | STATUSCD == 2) %>%  #removing trees that weren't measured due to no longer being in the sample
-  #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
-  filter(city %in% NE_cities_not_eval) %>% 
-  filter(!is.na(pol_mean))
-
-# plots_per_city <- left_join( all_trees_pollen_prod, pcv_out) %>%  
-#   dplyr::group_by(city) %>% 
-#   dplyr::select(PLT_CN) %>% 
-#   dplyr::distinct() %>% 
-#   dplyr::count(city) %>% 
-#   dplyr::rename(n_plots = n)
-# 
-# plots_per_city %>%  ungroup() %>% 
-#   filter( !is.na(city)) %>% 
-#   summarize(n = sum(n_plots))
-
-#calculate the number of plots in the city in that census
-  plt_join <- plt %>% mutate(plt_psca = CN)
-  psca_join <- psca %>% mutate(plt_psca = PLT_CN)
-  
-  plt_psca <- left_join(psca_join, plt_join, by = "plt_psca") %>% 
-    mutate(psca_psc_join = PSC_CN)
-  
-  psc_join <- psc %>% 
-    mutate(psca_psc_join = CN)
-  
-  plt_psca_psc <- left_join(plt_psca, psc_join, by = "psca_psc_join") %>% 
-    filter(EVALID %in% NE_cities) %>% 
-    filter(PLOT_STATUS_CD < 3) #removing plots that weren't sampled
-  
-  plots_per_city <-
-    plt_psca_psc %>% 
-    group_by(POPULATION_NAME) %>% 
-    summarize(n_plots = n())
-  
-  
-pc <- left_join(pc, plots_per_city) %>% 
-  mutate(city = stri_sub(city, 1, -3), #remove state from city name for figures
-         city = case_when(city == "Minneapol" ~ "Minneapolis", .default = city)) #expanding truncated name
-
-  #check on any values where the census info didn't get through
-  #test <- pc %>% filter(is.na(estimate_c_perc_poverty))
 
 
 ### statistics for paper ################################################
