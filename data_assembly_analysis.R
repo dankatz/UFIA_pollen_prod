@@ -1,6 +1,7 @@
-#This script is for quantifying pollen production in northeastern and midwestern US cities included in the UFIA 
-#Author: Daniel Katz (dankatz@cornell.edu), to be used for Keily Peralta's senior thesis
-# Pieces of the script are borrowed from Alex Young's work on the 'Poor Trees' project
+# This script is for quantifying pollen production in northeastern and midwestern US cities included in the UFIA 
+# Author: Daniel Katz (dankatz@cornell.edu), to be used for Keily Peralta's senior thesis
+# note: an earlier version of this manuscript included comparisons between race and poverty and pollen production; that 
+# has been removed
 
 ### prepare work environment ###################################################
 #install all required packages
@@ -35,15 +36,8 @@ setwd(file.path(wd)) #getwd()
 options(scipen=999)
 options(tigris_use_cache = TRUE)
 
-
 #set the directory for the UFIA files:
 UFIA_file_path <- "C:/Users/dsk273/Documents/tree_census"
-
-# # obtain your own US Census API key, via the following URL:
-# census_key <- read.table("C:/Users/dsk273/Documents/UFIA_pollen_prod/US census key.txt", stringsAsFactors = F, header = F)
-# census_api_key(census_key[1], install = TRUE, overwrite = TRUE)
-
-
 
 # categorizing cities by location in the country
 NE_cities <- c("BaltimoreMD2022Curr", "BurlingtonVT2022Curr",  "ChicagoIL2022Curr", "ClevelandOH2022Curr", 
@@ -59,31 +53,33 @@ NE_cities_not_eval <- c("BaltimoreMD", "BurlingtonVT",  "ChicagoIL", "ClevelandO
 
 
 ### adding the Urban FIA data from datamart #####################################
-psca <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_PLOT_STRAT_CALC_ASSGN.csv"))
-psc <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/POP_STRATUM_CALC.csv"))
-plt <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_PLOT.csv")) #summary(plt)
-ref_plot_status <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/REF_PLOT_STATUS.csv"))
-mtre <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_MOTHER_TREE.csv"))
-indiv_tree <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_TREE.csv"))
-subp <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_SUBPLOT.csv"))
-cnd <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_COND.csv"))
-spcnd <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_SUBP_COND.csv"))
-ref_species <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/REF_SPECIES.csv"))
-ref_species_group <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/REF_SPECIES_GROUP.csv"))
-plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plot_status$VALUE)]
+  psca <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_PLOT_STRAT_CALC_ASSGN.csv"))
+  psc <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/POP_STRATUM_CALC.csv"))
+  plt <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_PLOT.csv")) #summary(plt)
+  ref_plot_status <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/REF_PLOT_STATUS.csv"))
+  mtre <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_MOTHER_TREE.csv"))
+  indiv_tree <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_TREE.csv"))
+  subp <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_SUBPLOT.csv"))
+  cnd <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_COND.csv"))
+  spcnd <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/ID_SUBP_COND.csv"))
+  ref_species <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/REF_SPECIES.csv"))
+  ref_species_group <- read.csv(file.path(UFIA_file_path, "data","FIADB_URBAN_ENTIRE_CSV/REF_SPECIES_GROUP.csv"))
+  plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plot_status$VALUE)]
 
 
 ### compile UFIA dataset ########################################################
-
-## join the within-plot datasets
-  ref_species_join <- ref_species %>% select(SPCD, GENUS, SPECIES, COMMON_NAME)
+# for additional information on the complex relational UFIA database, visit the UFIA datamart 
+# and download the Urban FIADB USER GUIDES; this version follows V12.0 
   
-  mtre_join <- mtre %>% 
+  ## join the within-plot datasets
+  ref_species_join <- ref_species %>% select(SPCD, GENUS, SPECIES, COMMON_NAME) #species names
+  
+  mtre_join <- mtre %>%  #the "Mother tree" table
     select(TREE, SUBP,  STATUSCD, SPCD, DIA, CROWN_DIA_WIDE, CROWN_DIA_90, AVG_CROWN_WIDTH, IS_STREET_TREE, IS_PLANTED, BASAL_AREA,
            CN, PLT_CN, SBP_CN, CND_CN) %>% 
     left_join(., ref_species_join)
   
-  plt_join <- plt %>% 
+  plt_join <- plt %>%  #add information from the plot level table
     select(MEAS_YEAR, MEAS_MONTH, MEAS_DAY, PLOT_STATUS_CD, PLOT_NONSAMPLE_REASN_CD, LAT, LON, CN) %>% 
     rename(PLT_CN = CN)
   
@@ -101,7 +97,7 @@ plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plo
   psc_psca <- left_join(psca_join, psc_join, by = c("psca_PSC_CN" = "CN")) %>% 
           filter(EVALID %in% NE_cities)
   
-#add meta plot data to the tree-level data
+#add meta plot data to the tree-level data, create derived variables, and filter
   pcv <- left_join(mtre_plt, psc_psca, by = c("PLT_CN" = "psca_PLT_CN")) %>% 
     filter(!is.na(EVALID)) %>% 
     mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
@@ -130,25 +126,32 @@ plt$PLOT_STATUS_CD_LAB <- ref_plot_status$ABBR[match(plt$PLOT_STATUS_CD, ref_plo
     filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
     filter(STATUSCD == 1 | STATUSCD == 2) %>% #removing trees that weren't measured due to no longer being in the sample
     #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
-    filter(trees_alive == 1)  #removing dead trees
-
+    filter(trees_alive == 1) %>%  #removing dead trees
+    filter(STRATUM_LABEL != "Water") #removing plots that are in open water
+    
   
   
 ## calculate the number of plots in the city in that census (including plots without trees)  
   plots_per_city <-
     psc_psca %>% 
+    filter(STRATUM_LABEL != "Water") %>% #removing plots that are in open water
     group_by(POPULATION_NAME) %>% 
     summarize(n_plots = n())
   pcv <- left_join(pcv, plots_per_city) 
 
-### save the file used in the analysis 
-  csv_out_path <- file.path(here::here())
-  #write_csv(pcv, file = file.path( csv_out_path, "tree_data_251031.csv"))
-  #pcv <- read_csv(file = file.path( csv_out_path, "tree_data_251031.csv"))
-
-
+#calculate land area of city within surveying bounds (i.e., removing water area)
+  city_land_acres <- psc_psca %>% 
+    mutate(POPULATION_ACRES_land = POPULATION_ACRES - STRATUM_ACRES) %>% 
+    filter(STRATUM_LABEL == "Water") %>% #removing plots that are in open water
+    select(POPULATION_NAME, POPULATION_ACRES_land) %>% #, POPULATION_ACRES , STRATUM_LABEL, STRATUM_ACRES ) %>% 
+     distinct()
+  pcv <- left_join(pcv, city_land_acres) 
+  
 ### calculate pollen production for each individual adult tree #######################
-all_trees_for_pollen_prod <- pcv 
+# these calculations are based off the data presented in Katz et al. 2020
+# additional analyses were conducted to create equations that are more robust for particular taxa
+# the script for that is available here: "C:/Users/dsk273/Box/MIpostdoc/trees/pollen per tree/pollen per tree analysis and figs 251031.R"
+  all_trees_for_pollen_prod <- pcv 
 
 #calculate pollen production for each individual tree, using a loop allows SDs to be calculated
 for(i in 1:100){
@@ -185,6 +188,7 @@ for(i in 1:100){
     all_trees_for_pollen_prod %>%  
     
     #protect against unrealistic large trees having overly large numbers by setting canopy area equal to the max recorded in the underlying dataset
+    # note: this is only an issue for non-linear relationships, which have been substituted for linear relationships for everything besides Morus
     mutate(tree_area_c = case_when(
                             # Genus == "Acer" & Species == "negundo" & tree_area > 300 ~ 300,
                             # Genus == "Acer" & Species == "platanoides" & tree_area > 200 ~ 200,
@@ -212,7 +216,7 @@ for(i in 1:100){
           Genus == "Juglans"  ~ Juni_param_a * tree_area_c + Juni_param_b,
           Genus == "Morus"  ~ ((exp( Mosp_param_a * tree_area_c + Mosp_param_b) )/1000000000 ) * 0.578, #convert to billions and adjust for sex ratio
           Genus == "Platanus"  ~ Plac_param_a * tree_area_c + Plac_param_b,
-          Genus == "Populus"  ~ ( Posp_param_a * tree_area_c + Posp_param_b) * 0.482, #convert to billions and adjust for sex ratio
+          Genus == "Populus"  ~ ( Posp_param_a * tree_area_c + Posp_param_b) * 0.482, #adjust for sex ratio
           Genus == "Quercus"  ~ Qusp_param_a * tree_area_c + Qusp_param_b, #red oaks and unknown oaks
           Genus == "Quercus" & Species == "palustris"  ~ Qupa_param_a * tree_area_c + Qupa_param_b, #pin oaks
           Genus == "Ulmus"  ~ ( Ulsp_param_a * tree_area_c + Ulsp_param_b)
@@ -297,24 +301,35 @@ all_trees_pollen_prod <- left_join(all_trees_for_pollen_prod, indiv_tree_pol_pre
   mutate(pol_mean = case_when(Genus == "Morus" ~ pol_ba_mean, .default = pol_mean), 
          pol_sd = case_when(Genus == "Morus" ~ pol_ba_sd, .default = pol_sd))
  
-#canopy area pollen production
-all_trees_pollen_prod %>% 
-  filter(!is.na(pol_mean)) %>% 
-ggplot(aes(x = tree_area, y = pol_mean, col = Species)) + geom_point(alpha = 0.1) + facet_wrap(~Genus, scales = "free") + theme_bw() 
+#add the pollen production back to pcv
+all_trees_pollen_prod_join <- all_trees_pollen_prod %>% select(city, PLT_CN, TREE, DIA, LON, LAT, SPECIES, pol_mean, pol_sd, pol_ba_mean,  pol_ba_sd)
+pcv <- left_join(pcv, all_trees_pollen_prod_join, by = c("city", "PLT_CN", "TREE", "DIA", "LON", "LAT"))
+ 
+### save the file used in the analysis 
+csv_out_path <- file.path(here::here())
+#write_csv(pcv, file = file.path( csv_out_path, "tree_data_251031.csv"))
+#pcv <- read_csv(file = file.path( csv_out_path, "tree_data_251031.csv"))
 
-#basal area pollen production
-all_trees_pollen_prod %>% 
-  filter(!is.na(pol_ba_mean)) %>% 
-  ggplot(aes(x = tree_BA, y = pol_ba_mean, col = Species)) + geom_point(alpha = 0.1) + facet_wrap(~Genus, scales = "free") + theme_bw() 
 
-#compare pollen prod from canopy area-based approach to DBH based approach
-all_trees_pollen_prod %>% 
-  filter(!is.na(pol_mean)) %>% 
-  #filter(Genus == "Quercus" ) %>% 
-  #filter(tree_area < 200) %>% 
-  ggplot(aes(x = pol_mean, y = pol_ba_mean, col = log(tree_BA/tree_area))) + geom_point(alpha = 0.8) + facet_wrap(~Genus, scales = "free") + theme_bw() +
-  geom_abline(slope = 1, intercept = 0, lty = 2) + geom_smooth(method = "lm") + scale_color_viridis_c()
 
+# #canopy area pollen production
+# all_trees_pollen_prod %>% 
+#   filter(!is.na(pol_mean)) %>% 
+# ggplot(aes(x = tree_area, y = pol_mean, col = Species)) + geom_point(alpha = 0.1) + facet_wrap(~Genus, scales = "free") + theme_bw() 
+# 
+# #basal area pollen production
+# all_trees_pollen_prod %>% 
+#   filter(!is.na(pol_ba_mean)) %>% 
+#   ggplot(aes(x = tree_BA, y = pol_ba_mean, col = Species)) + geom_point(alpha = 0.1) + facet_wrap(~Genus, scales = "free") + theme_bw() 
+# 
+# #compare pollen prod from canopy area-based approach to DBH based approach
+# all_trees_pollen_prod %>% 
+#   filter(!is.na(pol_mean)) %>% 
+#   #filter(Genus == "Quercus" ) %>% 
+#   #filter(tree_area < 200) %>% 
+#   ggplot(aes(x = pol_mean, y = pol_ba_mean, col = log(tree_BA/tree_area))) + geom_point(alpha = 0.8) + facet_wrap(~Genus, scales = "free") + theme_bw() +
+#   geom_abline(slope = 1, intercept = 0, lty = 2) + geom_smooth(method = "lm") + scale_color_viridis_c()
+# 
 # all_trees_pollen_prod %>% 
 #   filter(!is.na(pol_mean)) %>% 
 #   filter(Genus == "Quercus") %>% 
@@ -331,22 +346,32 @@ all_trees_pollen_prod %>%
 #   filter(!is.na(pol_mean)) %>% 
 #   filter(Genus == "Morus" ) %>% 
 #   ggplot(aes(x = tree_area , y = tree_BA  , fill = Species)) + geom_point() + facet_wrap(~Species, scales = "free") + theme_bw() 
-# 
+
+### weight pollen production of individuals by relative fraction in landscape #######################################
+
+city_EXPNS <- pcv %>% 
+  group_by(city) %>% 
+  select(POPULATION_ACRES, STRATUM_LABEL, STRATUM_ACRES, STRATUM_PLOT_COUNT, EXPNS, STRATUM_WEIGHT, n_plots) %>% 
+  distinct() %>% 
+  summarize(mean_EXPNS = mean(EXPNS))
 
 
 
-
+  
 
 ### statistics for paper ################################################
 
 #summing across taxa, which cities have the highest pollen production per land area
-  pc %>% 
-    dplyr::group_by(city, n_plots, Genus) %>% 
-    dplyr::summarize(pol_sum = sum(pol_mean), #sum pollen in billions of grains per genus in each city
-                     tree_can_area_sum = sum(tree_area, na.rm = TRUE),
+  pcv %>% 
+    dplyr::group_by(city, n_plots, Genus, POPULATION_ACRES_land) %>% 
+    mutate(pol_mean_expns = pol_mean * EXPNS ,    #accounting for weighting by stratum
+         tree_area_expns = tree_area * EXPNS ) %>% 
+    dplyr::summarize(pol_sum = sum(pol_mean_expns, na.rm = TRUE), #sum pollen in billions of grains per genus in each city
+                     tree_can_area_sum = sum(tree_area_expns, na.rm = TRUE),
                      tree_can_area_mean = mean(tree_area, na.rm = TRUE),
                      n_trees = n()) %>% 
-    mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  #total pollen per genus (in billions) in that city by m2 measured #672.4535 is plot area in m2
+    left_join(., city_EXPNS) %>% 
+    mutate(pol_sum_m2 = (pol_sum / mean_EXPNS)/(672.4535 * n_plots)) %>%  #total pollen per genus (in billions) in that city by m2 measured #672.4535 is plot area in m2
     group_by(city) %>% 
     summarize(pol_sum_m2_mean = sum(pol_sum_m2)) %>% #sum across all taxa
     mutate(pol_sum_m2_mean_not_bil = pol_sum_m2_mean * 10^9,#convert back from billions
@@ -358,13 +383,13 @@ all_trees_pollen_prod %>%
     # summarize(pol_sum_m2_mean_allcities = mean(pol_sum_m2_mean))
 
 #summing across taxa, which cities have the highest pollen production per canopy area
-ca_per_city <- pc %>% 
+ca_per_city <- pcv %>% 
   dplyr::group_by(city) %>% 
   dplyr::summarize(ca_sum_city = sum(tree_area, na.rm = TRUE))
 
-pc %>% 
+pcv %>% 
   dplyr::group_by(city, n_plots) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE)) %>% 
   left_join(., ca_per_city) %>% 
   mutate(pol_ca = pol_sum/ca_sum_city)%>% 
   arrange(-pol_ca)  %>% print.data.frame()
@@ -385,9 +410,9 @@ pc %>%
 
 
 #averaging across cities, which taxa have the highest pollen production per m2 of all measured land area
-  pc %>% 
+  pcv %>% 
     dplyr::group_by(city, n_plots, Genus) %>% 
-    dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+    dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE)) %>% 
     mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  
     group_by(Genus) %>%  
     summarize(pol_sum_m2_mean = mean(pol_sum_m2),
@@ -627,7 +652,8 @@ pc %>%
 
 
 ### Fig 1 pollen production per genus ###################################
-fig1a <- pc %>% 
+fig1a <- pcv %>% 
+    filter(pol_mean > 0) %>% 
   dplyr::group_by(city, n_plots, Genus) %>% 
   dplyr::summarize(pol_sum = sum(pol_mean)) %>% #in billions of pollen grains
   mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
@@ -638,11 +664,12 @@ fig1a <- pc %>%
 
 
 ca_per_city <- 
-  pc %>% 
+  pcv %>% 
   dplyr::group_by(city) %>% 
   dplyr::summarize(ca_sum_city = sum(tree_area, na.rm = TRUE))
 
-fig1b <- pc %>% 
+fig1b <- pcv %>% 
+  filter(pol_mean > 0) %>% 
   dplyr::group_by(city, n_plots, Genus) %>% 
   dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE)) %>% 
   left_join(., ca_per_city) %>% 
@@ -655,16 +682,16 @@ fig1b <- pc %>%
 cowplot::plot_grid(fig1a, fig1b, nrow = 2)
 
 #significance for fig 1a
-fig_1a_aov <- pc %>% 
+fig_1a_aov <- pcv %>% 
   dplyr::group_by(city, PLT_CN) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE)) %>% 
     aov( pol_sum ~ city, data = .)
 summary(fig_1a_aov)
 
 #significance for fig 1b
-fig_1b_aov <- pc %>% 
+fig_1b_aov <- pcv %>% 
   dplyr::group_by(city, PLT_CN) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean),
+  dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE),
                    ba_sum = sum(tree_BA )) %>% 
   mutate(pol_per_ba = pol_sum/ba_sum) %>% 
   aov( pol_per_ba ~ city, data = .)
@@ -673,7 +700,7 @@ summary(fig_1b_aov)
 
 
 ### Fig 2: canopy area and basal area by city and genus #################################
-pc_npp <- left_join( all_trees_pollen_prod, pcv_out) %>% 
+pc_npp <- left_join( all_trees_pollen_prod, pcv) %>% 
   mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
                                  STATUSCD == 1 ~ 1)) %>% 
   filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
@@ -681,7 +708,7 @@ pc_npp <- left_join( all_trees_pollen_prod, pcv_out) %>%
   filter(city %in% NE_cities_not_eval)
 
 #currently this doesn't include plots without any trees nor strata corrections
-area_per_city <- left_join( all_trees_pollen_prod, pcv_out) %>%  
+area_per_city <- left_join( all_trees_pollen_prod, pcv) %>%  
   dplyr::group_by(city) %>% 
   dplyr::select(PLT_CN) %>% 
   dplyr::distinct() %>% 
@@ -766,7 +793,8 @@ pc_npp %>%
 
 
 ### Fig 3: differences in pollen production between planted and natural trees ################
-pc %>%
+pcv %>%
+  filter(pol_mean > 0) %>% 
   mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
                                          trees_planted == 1 ~ "planted",
                                          is.na(trees_planted) ~ "unknown")) %>% 
@@ -782,7 +810,8 @@ pc %>%
 
 #significance for fig 3
 #test <-
-pc %>% 
+pcv %>% 
+  filter(pol_mean > 0) %>% 
   dplyr::group_by(city, trees_planted, PLT_CN) %>% 
   dplyr::summarize(pol_sum = sum(pol_mean)) %>% 
   pivot_wider(names_from = trees_planted, values_from = pol_sum, names_prefix = "planted_") %>% 
@@ -799,7 +828,8 @@ pc %>%
 
 
 ### Fig 4: differences between street trees and non-street trees #################
-pc %>%
+pcv %>%
+  filter(pol_mean > 0) %>% 
   mutate(street_tree_label = case_when(street_tree == 0 ~ "not a street tree",
                                        street_tree == 1 ~ "street tree")) %>% 
   dplyr::group_by(city, street_tree_label, n_plots, Genus) %>%
