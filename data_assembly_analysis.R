@@ -696,8 +696,9 @@ pcv %>%
 ### Fig 1 pollen production per genus ###################################
 fig1a <- pcv %>% 
     filter(pol_mean > 0) %>% 
+    mutate(pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS)) %>% 
   dplyr::group_by(city, n_plots, Genus) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean)) %>% #in billions of pollen grains
+  dplyr::summarize(pol_sum = sum(pol_mean_expns)) %>% #in billions of pollen grains
   mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
   ggplot(aes(x = city, y = pol_sum_m2, fill = Genus)) + geom_col() + ggthemes::theme_few() +
   ylab(bquote("pollen per land area (billion grains /"~~m^2~")")) + 
@@ -708,12 +709,14 @@ fig1a <- pcv %>%
 ca_per_city <- 
   pcv %>% 
   dplyr::group_by(city) %>% 
-  dplyr::summarize(ca_sum_city = sum(tree_area, na.rm = TRUE))
+  mutate(tree_area_expns = tree_area * (EXPNS/mean_EXPNS)) %>% 
+  dplyr::summarize(ca_sum_city = sum(tree_area_expns, na.rm = TRUE))
 
 fig1b <- pcv %>% 
   filter(pol_mean > 0) %>% 
+  mutate(pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS)) %>% 
   dplyr::group_by(city, n_plots, Genus) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE)) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean_expns, na.rm = TRUE)) %>% 
   left_join(., ca_per_city) %>% 
   mutate(pol_ca = pol_sum/ca_sum_city) %>% 
   ggplot(aes(x = city, y = pol_ca, fill = Genus)) + geom_col() + ggthemes::theme_few() +
@@ -725,23 +728,84 @@ cowplot::plot_grid(fig1a, fig1b, nrow = 2)
 
 #significance for fig 1a
 fig_1a_aov <- pcv %>% 
+  mutate(pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS)) %>% 
   dplyr::group_by(city, PLT_CN) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE)) %>% 
+  dplyr::summarize(pol_sum = sum(pol_mean_expns, na.rm = TRUE)) %>% 
     aov( pol_sum ~ city, data = .)
 summary(fig_1a_aov)
 
 #significance for fig 1b
 fig_1b_aov <- pcv %>% 
+  mutate(pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS),
+         tree_area_expns = tree_area * (EXPNS/mean_EXPNS)) %>% 
   dplyr::group_by(city, PLT_CN) %>% 
-  dplyr::summarize(pol_sum = sum(pol_mean, na.rm = TRUE),
-                   ba_sum = sum(tree_BA )) %>% 
-  mutate(pol_per_ba = pol_sum/ba_sum) %>% 
-  aov( pol_per_ba ~ city, data = .)
+  dplyr::summarize(pol_sum = sum(pol_mean_expns, na.rm = TRUE),
+                   ca_sum = sum(tree_area_expns )) %>% 
+  mutate(pol_per_ca = pol_sum/ca_sum) %>% 
+  aov( pol_per_ca ~ city, data = .)
 summary(fig_1b_aov)
 
 
 
 ### Fig 2: canopy area and basal area by city and genus #################################
+city_can_area <- pcv %>% 
+  group_by(city) %>% 
+  mutate(tree_area_expns = tree_area * (EXPNS/mean_EXPNS)) %>% 
+  summarize(ca_sum_city = sum(tree_area_expns, na.rm = TRUE),
+            mean_EXPNS = mean(mean_EXPNS)) 
+
+
+#test <- 
+  left_join(mtre_plt, psc_psca, by = c("PLT_CN" = "psca_PLT_CN")) %>% 
+    filter(!is.na(EVALID)) %>% 
+    filter(SUBP == 1) %>%  #restricting to non-sapling trees (DBH > 5 in)
+    filter(STATUSCD == 1 | STATUSCD == 2) %>% #removing trees that weren't measured due to no longer being in the sample
+    #STATUSCD 0 == tree is not in the remeasured plot, STATUSCD 3 == cut and utilized, STATUSCD 4 == removed
+    filter(STRATUM_LABEL != "Water") %>%  #removing plots that are in open water
+  mutate(city_state = gsub(pattern = "City of ", replacement = "", x = ESTN_UNIT_NAME), 
+         city = stri_sub(city_state, 1, -5), #remove state from city name for figures
+         city = case_when(city == "Portland, ME Urban Area:Portland" ~ "Portland, ME",
+                          city == "Trenton, NJ Urban " ~ "Trenton",
+                          .default = city),
+         city_area_ha = ESTN_UNIT_ACRES/2.471, #convert from acres to ha
+         Genus = GENUS,
+         Species = gsub("^\\S+ ", "", SPECIES),
+         dbh_cm = DIA *2.54,
+         tree_BA = 0.00007854 * dbh_cm^2,
+         tree_can_diam_ft = case_when( !is.na(CROWN_DIA_WIDE) ~  (CROWN_DIA_WIDE + CROWN_DIA_90)/2,
+                                       is.na(CROWN_DIA_WIDE) ~  AVG_CROWN_WIDTH), #use modeled width when diameter wasn't measured
+         tree_can_diam_m = tree_can_diam_ft * 0.3048,
+         tree_can_radius_m = tree_can_diam_m/2,
+         tree_area = pi * (tree_can_radius_m^2)) %>%  #convert crown radius in m to m2
+    left_join(., city_can_area) %>% 
+    mutate( tree_area_expns = tree_area * (EXPNS/mean_EXPNS),
+            plot_area = 672.4535 * city_area_ha) %>% 
+    
+  group_by(city, Genus) %>% 
+   summarize(ca_sum = sum(tree_area_expns, na.rm = TRUE),
+             plot_area_sum = sum(plot_area_expns)) %>% 
+            # ca_sum_city = mean(ca_sum_city)) %>% 
+
+  mutate(
+    prop_ca = ca_sum / plot_area_sum,
+    perc_ca = prop_ca * 100,
+    Genus = case_when(perc_ca < .02 ~ "other",
+                      perc_ca >= 0.02 ~ Genus),
+    city = stri_sub(city, 1, -3),
+    city = case_when(city == "Minneapol" ~ "Minneapolis", .default = city)) %>%
+  
+  ggplot(aes(x = city, y = prop_ca, fill = Genus)) + geom_col() + ggthemes::theme_few() +
+  #ylab("canopy area (%)") +  
+  ylab(bquote(canopy~area~(m^2~"/"~ha))) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.text = element_text(face="italic")) +
+  grafify::scale_fill_grafify(palette = "light")
+
+#ggsave("C:/Users/dsk273/Box/writing/UFIA pollen production/fig2_ba_by_city.pdf", height = 1500, width = 3000, units = "px")
+
+
+
+
+
 pc_npp <- left_join( all_trees_pollen_prod, pcv) %>% 
   mutate(trees_alive = case_when(STATUSCD == 2 ~ 0, #STATUSCD 1 == live tree, STATUSCD 2 == dead tree
                                  STATUSCD == 1 ~ 1)) %>% 
