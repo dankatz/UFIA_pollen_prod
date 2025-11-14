@@ -366,6 +366,12 @@ pcv <- left_join(pcv, city_EXPNS)
   
 ### statistics for paper ################################################
 
+#how many trees was pollen production calculated for 
+pcv %>%  filter(pol_mean > 0) 
+
+#how many plots
+length(unique(pcv$PLT_CN))
+
 #summing across taxa, which cities have the highest pollen production per land area
   pcv %>% 
     dplyr::group_by(city, n_plots, Genus) %>% 
@@ -380,7 +386,7 @@ pcv <- left_join(pcv, city_EXPNS)
     summarize(pol_sum_m2_mean = sum(pol_sum_m2)) %>% #sum across all taxa
     mutate(pol_sum_m2_mean_not_bil = pol_sum_m2_mean * 10^9,#convert back from billions
            pol_sum_m2_mean_mil = pol_sum_m2_mean_not_bil/ 1000000) %>% 
-    arrange(-pol_sum_m2_mean_not_bil) 
+    arrange(-pol_sum_m2_mean_not_bil) #%>% ungroup() %>% summarize(mean_pol_sum_m2_mean = mean(pol_sum_m2_mean)) #average across all cities
   
       #comparing to a version that isn't corrected for weighting by stratum area
         # pcv %>% 
@@ -469,6 +475,54 @@ pcv %>%
   #what percent of known pollen production are the top 4 genera?
   #(0.057765664    + 0.049313470    + 0.016987478    + 0.008710561   )  /  0.162     
 
+#what fraction of pollen production is from planted vs unplanted trees in each city
+  pcv %>%
+    filter(pol_mean > 0) %>% 
+    mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
+                                           trees_planted == 1 ~ "planted",
+                                           is.na(trees_planted) ~ "unknown"),
+           pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS)) %>% 
+    group_by(city, trees_planted_label, n_plots) %>% 
+    summarize(pol_sum = sum(pol_mean_expns)) %>% 
+    mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
+    select(city, trees_planted_label, pol_sum_m2) %>% 
+  pivot_wider(names_from = trees_planted_label, values_from = pol_sum_m2) %>% 
+    mutate(planted_ratio = planted/ natural,
+           planted_prop = planted / (planted + natural)) %>% 
+    arrange(planted_prop)  #%>%  ungroup() %>% summarize(mean_planted_prop = mean(planted_prop)) #average across all cities
+  
+#what fraction of pollen production is from planted vs unplanted trees for each genus
+  pcv %>%
+    filter(pol_mean > 0) %>% 
+    mutate(trees_planted_label = case_when(trees_planted == 0 ~ "natural",
+                                           trees_planted == 1 ~ "planted",
+                                           is.na(trees_planted) ~ "unknown"),
+           pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS)) %>% 
+    group_by(city, Genus, trees_planted_label, n_plots) %>% 
+    summarize(pol_sum = sum(pol_mean_expns)) %>% 
+    mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
+    select(Genus, trees_planted_label, pol_sum_m2) %>% 
+    pivot_wider(names_from = trees_planted_label, values_from = pol_sum_m2) %>% 
+    mutate(planted_ratio = planted/ natural,
+           planted_prop = planted / (planted + natural)) %>% 
+    group_by(Genus) %>%  
+    summarize(planted_prop_mean = mean(planted_prop, na.rm = TRUE))
+  
+#what fraction of pollen production is from street trees in each city
+  pcv %>%
+    filter(pol_mean > 0) %>% 
+    mutate(street_tree_label = case_when(street_tree == 0 ~ "not_street_tree",
+                                           street_tree == 1 ~ "street_tree",
+                                           is.na(street_tree) ~ "unknown"),
+           pol_mean_expns = pol_mean * (EXPNS/mean_EXPNS)) %>% 
+    group_by(city, street_tree_label, n_plots) %>% 
+    summarize(pol_sum = sum(pol_mean_expns)) %>% 
+    mutate(pol_sum_m2 = pol_sum/(n_plots * 672.4535)) %>%  # Plot area in m2 = 672.4535
+    select(city, street_tree_label, pol_sum_m2) %>% 
+    pivot_wider(names_from = street_tree_label, values_from = pol_sum_m2) %>% 
+    mutate(street_tree_ratio = not_street_tree/ street_tree,
+           street_tree_prop = street_tree / (street_tree + not_street_tree)) %>% 
+    arrange(street_tree_prop)  #%>%  ungroup() %>% summarize(mean_street_tree_prop = mean(street_tree_prop)) #average across all cities
   
 # ### what portion of total basal area are the taxa that we calculated pollen production for? #####
 #   #basal area of pollen trees
@@ -517,9 +571,9 @@ pcv %>%
     summarize(ca_m2_total_alltrees = sum(tree_area, na.rm = TRUE))
   
   left_join(ca_total_pollen_trees, ca_total_all_trees) %>% 
-    mutate(fraction_ca_pol = ca_m2_total_wind / ca_m2_total_alltrees) %>% 
-    ungroup() %>% 
-    summarize(mean_fract = mean(fraction_ca_pol))
+    mutate(fraction_ca_pol = ca_m2_total_wind / ca_m2_total_alltrees) #%>% 
+    # ungroup() %>% uncomment this section to get the estimate across all cities
+    # summarize(mean_fract = mean(fraction_ca_pol))
   
 ### what portion of canopy area of wind-pollinated taxa are the taxa that we calculated pollen production for? #######
   #total canopy area across all focal cities
@@ -564,6 +618,16 @@ pcv %>%
     ca_total_of_our_focal_taxa$ca_m2_total_focal_trees / ca_total_of_all_windpol_taxa$ca_m2_total_windpol_trees
     
   
+  #what fraction of total wind-pollinated canopy area do our pollen production estimates account for after removing Pinaceae and Fraxinus?
+      windpol_taxa_to_exclude <- c("Fraxinus","Larix", "Picea", "Pinus",  "Pseudotsuga", "Tsuga")
+      pcv %>% 
+      filter(GENUS %in% windpol_taxa) %>% 
+      filter(! Genus %in% windpol_taxa_to_exclude) %>% 
+      summarize(ca_m2_total_windpol_trees = sum(tree_area, na.rm = TRUE)) %>% 
+        mutate( ca_total_of_our_focal_taxa$ca_m2_total_focal_trees / ca_m2_total_windpol_trees)
+    
+      
+    
   # #what portion of basal area of wind-pollinated taxa are the taxa that we calculated pollen production for?
   # #total BA across all focal cities
   #   ba_total_all_trees_not_by_city <- 
